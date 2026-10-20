@@ -116,6 +116,7 @@ def _build_default_app() -> FastAPI:
     """Wire real SQLite + Ollama for uvicorn. Not used by tests."""
     db = os.environ.get("ECO_DB_PATH", "eco.db")
     host = os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
+    host = host.replace("http://", "").replace("https://", "")  # env var may carry a scheme
     client = httpx.Client(base_url=f"http://{host}")
     # Image support on the text primary is decided by verify_models.ps1; default
     # to False so vision routes to the real vision model unless proven otherwise.
