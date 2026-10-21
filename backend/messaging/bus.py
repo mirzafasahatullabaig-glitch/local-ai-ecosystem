@@ -80,3 +80,49 @@ class MqttDeviceBus:
         client.loop_stop()
         client.disconnect()
         return events
+
+
+class DeviceListener:
+    """Background MQTT subscriber that keeps the registry live: devices that
+    announce a manifest are registered; a manifest or state message refreshes
+    their heartbeat. Lets devices self-register instead of the laptop POSTing.
+    """
+
+    def __init__(self, registry, broker: str, port: int = 1883) -> None:
+        self._registry = registry
+        self._broker = broker
+        self._port = port
+        self._client = None
+
+    def start(self) -> None:
+        import paho.mqtt.client as mqtt
+        from schemas.messages import Manifest, now_ms
+
+        def on_connect(c, u, flags, rc, props=None):
+            c.subscribe("eco/v1/devices/+/manifest", qos=1)
+            c.subscribe("eco/v1/devices/+/state", qos=1)
+
+        def on_message(c, u, msg):
+            kind = msg.topic.rsplit("/", 1)[-1]
+            if kind == "manifest":
+                try:
+                    m = Manifest.model_validate_json(msg.payload)
+                    self._registry.register(m)
+                    self._registry.heartbeat(m.device_id)
+                except Exception:  # noqa: BLE001 - ignore malformed announcements
+                    pass
+            elif kind == "state":
+                device_id = msg.topic.split("/")[3]
+                self._registry.heartbeat(device_id, now_ms())
+
+        self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
+                                   client_id="eco-api-listener")
+        self._client.on_connect = on_connect
+        self._client.on_message = on_message
+        self._client.connect(self._broker, self._port, keepalive=30)
+        self._client.loop_start()
+
+    def stop(self) -> None:
+        if self._client is not None:
+            self._client.loop_stop()
+            self._client.disconnect()

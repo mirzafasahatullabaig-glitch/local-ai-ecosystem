@@ -14,6 +14,7 @@ import uuid
 
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from backend.device_registry.registry import DeviceRegistry, RegistrationError
@@ -39,10 +40,94 @@ class AskRequest(BaseModel):
     text: str
 
 
+_INDEX_HTML = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>local-ai-ecosystem</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --fg:#e6e6e6; --mut:#8b93a1;
+          --ok:#3ecf8e; --bad:#e5534b; --accent:#5b9bff; }
+  * { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--fg);
+      font:15px/1.5 system-ui,sans-serif; padding:16px; }
+  h1 { font-size:20px; margin:0 0 4px; } .mut { color:var(--mut); font-size:13px; }
+  .card { background:var(--card); border-radius:10px; padding:14px; margin:12px 0; }
+  .dev { display:flex; justify-content:space-between; padding:6px 0;
+         border-bottom:1px solid #2a2e37; } .dev:last-child { border:0; }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px; }
+  .live { background:var(--ok); } .stale { background:var(--bad); }
+  input,button { font:inherit; } input[type=text] { width:100%; padding:10px;
+    border-radius:8px; border:1px solid #2a2e37; background:#0c0e12; color:var(--fg); }
+  button { padding:9px 14px; border-radius:8px; border:0; background:var(--accent);
+    color:#fff; cursor:pointer; margin:6px 6px 0 0; } button.alt { background:#2a2e37; }
+  pre { background:#0c0e12; padding:12px; border-radius:8px; overflow:auto;
+    white-space:pre-wrap; word-break:break-word; max-height:50vh; }
+  .states span { display:inline-block; padding:2px 7px; margin:2px; border-radius:6px;
+    background:#23303f; font-size:12px; }
+</style></head><body>
+<h1>local-ai-ecosystem</h1>
+<div class="mut">Phase 2 control panel &middot; talks to the live API and devices</div>
+
+<div class="card"><b>Devices</b> <span class="mut" id="devcount"></span>
+  <div id="devices" class="mut">loading&hellip;</div></div>
+
+<div class="card">
+  <input id="ask" type="text" placeholder='Ask something, or try "ping all devices"'
+         value="what is MQTT">
+  <div>
+    <button onclick="send()">Ask</button>
+    <button class="alt" onclick="quick('ping all devices')">Ping all</button>
+    <button class="alt" onclick="quick('list devices')">List devices</button>
+    <button class="alt" onclick="quick('estop')">E-stop</button>
+  </div>
+</div>
+
+<div class="card"><b>Result</b><pre id="out">—</pre></div>
+
+<script>
+async function loadDevices() {
+  try {
+    const r = await fetch('/devices'); const j = await r.json();
+    const el = document.getElementById('devices');
+    document.getElementById('devcount').textContent = '(' + j.devices.length + ')';
+    if (!j.devices.length) { el.textContent = 'none registered'; return; }
+    el.innerHTML = j.devices.map(d => {
+      const live = !d.stale && d.online;
+      const caps = (d.capabilities||[]).map(c => c.name).join(', ');
+      return `<div class="dev"><span><span class="dot ${live?'live':'stale'}"></span>
+        <b>${d.device_id}</b> <span class="mut">${d.device_type||''} &middot; ${caps}</span></span>
+        <span class="mut">${live?'live':'stale'}</span></div>`;
+    }).join('');
+  } catch(e) { document.getElementById('devices').textContent = 'API unreachable'; }
+}
+function quick(t){ document.getElementById('ask').value = t; send(); }
+async function send() {
+  const text = document.getElementById('ask').value;
+  const out = document.getElementById('out'); out.textContent = 'sending…';
+  try {
+    const r = await fetch('/ask', {method:'POST', headers:{'Content-Type':'application/json'},
+                                   body: JSON.stringify({text})});
+    const j = await r.json();
+    if (j.answer) { out.textContent = j.answer + '\\n\\n[' + j.model + ', ' +
+        j.metrics.tokens_per_s + ' tok/s]'; }
+    else if (j.results) {
+      out.innerHTML = j.results.map(x => `<b>${x.device_id}</b><div class="states">` +
+        x.states.map(s=>`<span>${s}</span>`).join('') + '</div>').join('');
+    } else { out.textContent = JSON.stringify(j, null, 2); }
+  } catch(e) { out.textContent = 'error: ' + e; }
+  loadDevices();
+}
+loadDevices(); setInterval(loadDevices, 3000);
+</script></body></html>"""
+
+
 def create_app(repo: Repository, gateway: ModelGateway,
                bus: "DeviceBus | None" = None) -> FastAPI:
     app = FastAPI(title="local-ai-ecosystem", version="1")
     registry = DeviceRegistry(repo)
+
+    @app.get("/", response_class=HTMLResponse)
+    def index() -> str:
+        return _INDEX_HTML
 
     @app.get("/health")
     def health() -> dict:
@@ -154,9 +239,16 @@ def _build_default_app() -> FastAPI:
     gateway = ModelGateway(client, vision_primary_supports_images=supports)
     # Broker on the Pi by default; override with ECO_BROKER.
     broker = os.environ.get("ECO_BROKER", "YOUR_PI_IP")
-    from backend.messaging.bus import MqttDeviceBus
-    bus = MqttDeviceBus(broker, int(os.environ.get("ECO_BROKER_PORT", "1883")))
-    return create_app(SQLiteRepository(db), gateway, bus=bus)
+    port = int(os.environ.get("ECO_BROKER_PORT", "1883"))
+    from backend.messaging.bus import DeviceListener, MqttDeviceBus
+    bus = MqttDeviceBus(broker, port)
+    app = create_app(SQLiteRepository(db), gateway, bus=bus)
+    # Background listener auto-registers devices and keeps them live from their
+    # retained manifest + periodic state, so the web UI shows real status.
+    listener = DeviceListener(DeviceRegistry(SQLiteRepository(db)), broker, port)
+    listener.start()
+    app.state.listener = listener
+    return app
 
 
 app = _build_default_app()

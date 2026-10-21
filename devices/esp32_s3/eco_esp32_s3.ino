@@ -149,8 +149,12 @@ void setup() {
   Serial.println("agent running");
 }
 
+unsigned long lastBeat = 0;
+
 void loop() {
   if (WiFi.status() != WL_CONNECTED) connectWifi();
   if (!mqtt.connected()) connectMqtt();
   mqtt.loop();
+  // Periodic heartbeat so the API keeps us live (stale after 15s idle).
+  if (millis() - lastBeat > 5000) { publishState(true); lastBeat = millis(); }
 }

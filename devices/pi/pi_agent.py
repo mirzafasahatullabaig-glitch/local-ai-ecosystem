@@ -117,11 +117,17 @@ def main() -> None:
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect(BROKER, PORT, keepalive=30)
+    client.loop_start()
     print("agent running; Ctrl-C to stop")
     try:
-        client.loop_forever()
+        while True:
+            # Periodic heartbeat so the API keeps us live (stale after 15s idle).
+            client.publish(STATE_TOPIC, json.dumps({"online": True, "ts": proto.now_ms()}),
+                           qos=0, retain=True)
+            time.sleep(5)
     except KeyboardInterrupt:
         client.publish(STATE_TOPIC, json.dumps({"online": False}), qos=1, retain=True)
+        client.loop_stop()
         client.disconnect()
         print("\nstopped")
         sys.exit(0)
