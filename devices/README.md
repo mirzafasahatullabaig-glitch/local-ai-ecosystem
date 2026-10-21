@@ -58,8 +58,16 @@ full event chain.
 > use an addressable WS2812 needing `rgbLedWrite(pin,r,g,b)`, XIAO S3 uses
 > GPIO 21 active-LOW. Protocol path is fully verified regardless.
 
-## Not wired yet
+## API → broker (wired, verified 2026-10-21)
 
-The laptop FastAPI `estop`/`capture` endpoints still return HTTP 501; they do
-not publish to the broker yet. Commands above were sent with a standalone paho
-publisher. Wiring the API to the broker is the next step.
+`backend/messaging/bus.py` publishes Commands and collects Events. The API's
+`/ask` deterministic device actions (`estop`, `capture_image`, `ping`) pick
+devices by capability and dispatch through it. The LLM never emits commands.
+
+End-to-end verified: one call `/ask {"text":"ping all devices"}` published a
+Command to both the Pi and the ESP32-S3 over MQTT and collected
+`received→accepted→executing→completed` from each.
+
+> shortcut: agents don't send periodic heartbeats, so a device goes stale 15s
+> after register (`find_by_capability` then skips it). Re-register to refresh.
+> Fix = a heartbeat endpoint + agent-side periodic pings.

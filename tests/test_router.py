@@ -20,6 +20,8 @@ CASES = [
     ("take a photo", "deterministic", "capture_image"),
     ("capture an image now", "deterministic", "capture_image"),
     ("take picture", "deterministic", "capture_image"),
+    ("ping", "deterministic", "ping"),
+    ("ping all devices", "deterministic", "ping"),
     # --- code role ---
     ("write a python function to sort a list", "llm", "code"),
     ("fix this bug in my script", "llm", "code"),

@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from backend.device_registry.registry import DeviceRegistry, RegistrationError
+from backend.messaging.bus import DeviceBus, build_command
 from backend.model_gateway.gateway import GatewayError, ModelGateway, ROLE_MODELS
 from backend.orchestrator.router import route
 from backend.storage.sqlite_repo import Repository, SQLiteRepository
@@ -24,16 +25,22 @@ from schemas.messages import Manifest, now_ms
 
 log = logging.getLogger("eco.api")
 
-# Actions that cannot be fulfilled until the Phase-2 messaging layer exists.
-_NEEDS_MESSAGING = {"estop": "e-stop", "capture_image": "image capture",
-                    "device_status": "device status"}
+# Deterministic actions that act on devices -> (device action, capability to
+# match, params). The capability is how we pick devices; never by name. The LLM
+# never populates this table — it is fixed, whitelisted, server-side.
+_DEVICE_ACTIONS = {
+    "estop": ("estop", "estop", {}),
+    "capture_image": ("capture_image", "capture_image", {}),
+    "ping": ("ping", "ping", {}),
+}
 
 
 class AskRequest(BaseModel):
     text: str
 
 
-def create_app(repo: Repository, gateway: ModelGateway) -> FastAPI:
+def create_app(repo: Repository, gateway: ModelGateway,
+               bus: "DeviceBus | None" = None) -> FastAPI:
     app = FastAPI(title="local-ai-ecosystem", version="1")
     registry = DeviceRegistry(repo)
 
@@ -62,6 +69,31 @@ def create_app(repo: Repository, gateway: ModelGateway) -> FastAPI:
     def tasks() -> dict:
         return {"tasks": repo.list_tasks()}
 
+    def _dispatch_device_action(action: str) -> dict:
+        dev_action, capability, params = _DEVICE_ACTIONS[action]
+        if bus is None:
+            raise HTTPException(status_code=501,
+                                detail=f"{action} requires messaging layer (no bus configured)")
+        # shortcut: agents don't send periodic heartbeats yet, so a device goes
+        # stale 15s after register. Add a heartbeat endpoint + agent-side pings
+        # before relying on this for long-lived devices.
+        targets = registry.find_by_capability(capability)
+        if not targets:
+            raise HTTPException(status_code=404,
+                                detail=f"no live device offers capability {capability!r}")
+        results = []
+        for i, dev in enumerate(targets):
+            cmd = build_command(dev["device_id"], dev_action, params,
+                                user="api", seq=i)
+            events = bus.send_command(cmd)
+            states = [e.state.value for e in events]
+            log.info("ask action=%s device=%s states=%s",
+                     action, dev["device_id"], states)
+            results.append({"device_id": dev["device_id"],
+                            "command_id": cmd.command_id, "states": states})
+        return {"tier": "deterministic", "action": action,
+                "capability": capability, "results": results}
+
     @app.post("/ask")
     def ask(req: AskRequest) -> dict:
         decision = route(req.text)
@@ -76,13 +108,11 @@ def create_app(repo: Repository, gateway: ModelGateway) -> FastAPI:
                 log.info("ask tier=deterministic action=list_models")
                 return {"tier": "deterministic", "action": action,
                         "roles": {r: list(m) for r, m in ROLE_MODELS.items()}}
-            # estop / capture / device_status need the messaging layer
-            label = _NEEDS_MESSAGING.get(action, action)
-            log.info("ask tier=deterministic action=%s -> phase2", action)
-            raise HTTPException(
-                status_code=501,
-                detail=f"{label} requires messaging layer (Phase 2)",
-            )
+            if action in _DEVICE_ACTIONS:
+                return _dispatch_device_action(action)
+            log.info("ask tier=deterministic action=%s -> unsupported", action)
+            raise HTTPException(status_code=501,
+                                detail=f"{action} not implemented")
 
         # LLM tier
         task_id = uuid.uuid4().hex
@@ -122,7 +152,11 @@ def _build_default_app() -> FastAPI:
     # to False so vision routes to the real vision model unless proven otherwise.
     supports = os.environ.get("VISION_PRIMARY_IMAGES", "0") == "1"
     gateway = ModelGateway(client, vision_primary_supports_images=supports)
-    return create_app(SQLiteRepository(db), gateway)
+    # Broker on the Pi by default; override with ECO_BROKER.
+    broker = os.environ.get("ECO_BROKER", "YOUR_PI_IP")
+    from backend.messaging.bus import MqttDeviceBus
+    bus = MqttDeviceBus(broker, int(os.environ.get("ECO_BROKER_PORT", "1883")))
+    return create_app(SQLiteRepository(db), gateway, bus=bus)
 
 
 app = _build_default_app()

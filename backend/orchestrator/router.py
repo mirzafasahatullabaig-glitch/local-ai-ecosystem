@@ -32,6 +32,7 @@ _DETERMINISTIC: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\A(device status|status of)\b"), "device_status"),
     (re.compile(r"\A(list|show) models\b"), "list_models"),
     (re.compile(r"\A(capture|take)( an?)? (image|photo|picture)\b"), "capture_image"),
+    (re.compile(r"\Aping( all)?( devices)?\b"), "ping"),
 ]
 
 # Tier 2 role hints (substring is fine here: these only pick a model, they do
