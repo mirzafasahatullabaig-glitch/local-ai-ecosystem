@@ -3,7 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.main import create_app
-from backend.model_gateway.gateway import ModelGateway, PRIMARY
+from backend.model_gateway.gateway import ModelGateway
 from backend.storage.sqlite_repo import SQLiteRepository
 
 OK_BODY = {
@@ -88,7 +88,7 @@ def test_ask_llm_returns_metrics(client):
     body = r.json()
     assert body["tier"] == "llm"
     assert body["role"] == "reason"
-    assert body["model"] == PRIMARY
+    assert body["model"] == "llama3.2:3b"  # reason now uses the fast model
     assert body["metrics"]["tokens"] == 20
     # task was logged
     assert len(client.get("/tasks").json()["tasks"]) == 1

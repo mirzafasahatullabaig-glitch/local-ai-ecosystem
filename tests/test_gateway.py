@@ -5,6 +5,7 @@ from backend.model_gateway.gateway import (
     GatewayError,
     ModelGateway,
     PRIMARY,
+    WARM,
 )
 
 # A realistic Ollama /api/generate body (durations in nanoseconds).
@@ -32,8 +33,8 @@ def test_primary_path_and_metrics():
         return httpx.Response(200, json=OK_BODY)
 
     gw = make_gateway(handler)
-    res = gw.generate("reason", "hi")
-    assert res.model == PRIMARY
+    res = gw.generate("reason", "hi")  # reason's primary is the warm model
+    assert res.model == WARM
     assert res.fell_back is False
     assert res.text == "hello"
     # metrics math
@@ -51,16 +52,16 @@ def test_primary_path_and_metrics():
 def test_fallback_on_primary_500():
     def handler(req: httpx.Request) -> httpx.Response:
         body = req.content.decode()
-        # primary fails; fallback (llama3.2:3b) succeeds
-        if f'"{PRIMARY}"' in body and '"prompt"' in body:
+        # reason's primary (llama3.2:3b) fails; fallback (qwen3.5:4b) succeeds
+        if '"llama3.2:3b"' in body and '"prompt"' in body:
             return httpx.Response(500, json={"error": "boom"})
         return httpx.Response(200, json=OK_BODY)
 
     gw = make_gateway(handler)
     res = gw.generate("reason", "hi")
-    assert res.model == "llama3.2:3b"
+    assert res.model == PRIMARY
     assert res.fell_back is True
-    assert res.tried == [PRIMARY, "llama3.2:3b"]
+    assert res.tried == ["llama3.2:3b", PRIMARY]
 
 
 def test_all_models_fail_raises():
@@ -98,8 +99,8 @@ def test_specialist_unloads_before_loading():
     # ps checked, primary unloaded, THEN specialist generates
     assert order.index("ps") < order.index("unload:qwen3.5:4b")
     assert order.index("unload:qwen3.5:4b") < order.index("generate:qwen2.5-coder:7b")
-    # primary re-warmed after
-    assert order[-1] == f"warm:{PRIMARY}"
+    # warm model restored after
+    assert order[-1] == f"warm:{WARM}"
 
 
 def test_vision_routes_to_vl_when_primary_cant_see():

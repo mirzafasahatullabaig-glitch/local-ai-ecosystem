@@ -13,16 +13,20 @@ from typing import Optional
 
 import httpx
 
-PRIMARY = "qwen3.5:4b"
+PRIMARY = "qwen3.5:4b"          # the reasoning model (vision/plan/reason-fallback)
+WARM = "llama3.2:3b"            # kept resident in VRAM; fast, no reasoning trace
 PRIMARY_NUM_CTX = 4096
 
-# role -> (primary, fallback). Vision's effective primary depends on whether
-# the text primary accepts images on this Ollama build (see __init__).
+# role -> (primary, fallback). WARM (llama3.2:3b) is the resident model, so
+# reason — the common interactive path — answers in a few seconds with no
+# reload. qwen3.5:4b handles vision/plan and backs up reason; it is loaded on
+# demand (unload WARM, run, re-warm WARM). plan keeps qwen first since
+# multi-step tasks benefit from the reasoning trace.
 ROLE_MODELS: dict[str, tuple[str, str]] = {
-    "reason": (PRIMARY, "llama3.2:3b"),
+    "reason": (WARM, PRIMARY),
     "vision": (PRIMARY, "qwen3-vl:2b"),
     "code": ("qwen2.5-coder:7b", "deepseek-coder:6.7b"),
-    "plan": (PRIMARY, "llama3.2:3b"),  # plan reasons in text, same models
+    "plan": (PRIMARY, WARM),
 }
 
 
@@ -97,9 +101,10 @@ class ModelGateway:
         )
 
     def _warm_primary(self) -> None:
+        # Keep the WARM model resident so the common reason path never reloads.
         self._client.post(
             "/api/generate",
-            json={"model": PRIMARY, "keep_alive": -1,
+            json={"model": WARM, "keep_alive": -1,
                   "options": {"num_ctx": PRIMARY_NUM_CTX}},
             timeout=self._timeout,
         )
@@ -123,8 +128,8 @@ class ModelGateway:
         return r.json()
 
     def _call_one(self, model: str, prompt: str) -> GatewayResult:
-        is_primary = model == PRIMARY
-        if is_primary:
+        is_warm = model == WARM
+        if is_warm:
             options = {"num_ctx": PRIMARY_NUM_CTX}
             keep_alive = -1
         else:
@@ -135,7 +140,7 @@ class ModelGateway:
 
         body = self._generate(model, prompt, keep_alive, options)
 
-        if not is_primary:
+        if not is_warm:
             self._warm_primary()  # restore the warm default
 
         return GatewayResult(
