@@ -50,7 +50,13 @@ full event chain.
 | Device | IP | ping | blink_led | expiry |
 |--------|-----|------|-----------|--------|
 | Pi (`raspberrypi`) | YOUR_PI_IP | ✅ | stub | `received→expired` ✅ |
-| ESP32-S3 (`esp32_s3_01`) | LAN_IP | ✅ | ran 1001 ms | issuer-enforced |
+| ESP32-S3 (`esp32_s3_01`) | LAN_IP | ✅ | code ran (see note) | issuer-enforced |
+
+> blink_led runs correctly in firmware (executing→completed gap matches the
+> requested ms) but the physical LED did not light — GPIO 48 is likely the
+> wrong pin/LED type for this board. TODO: confirm board model; many S3 boards
+> use an addressable WS2812 needing `rgbLedWrite(pin,r,g,b)`, XIAO S3 uses
+> GPIO 21 active-LOW. Protocol path is fully verified regardless.
 
 ## Not wired yet
 
