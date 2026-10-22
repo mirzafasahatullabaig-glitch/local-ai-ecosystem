@@ -9,6 +9,7 @@ deterministic actions and sends them here.
 """
 from __future__ import annotations
 
+import json
 import threading
 import uuid
 from typing import Optional, Protocol
@@ -91,11 +92,15 @@ class DeviceListener:
     """Background MQTT subscriber that keeps the registry live: devices that
     announce a manifest are registered; a manifest or state message refreshes
     their heartbeat. Lets devices self-register instead of the laptop POSTing.
+    If `sensors` is given, the latest DHT reading seen on any evt is kept in it
+    so the API can tell the LLM about the room.
     """
 
     def __init__(self, registry, broker: str, port: int = 1883,
-                 user: str | None = None, password: str | None = None) -> None:
+                 user: str | None = None, password: str | None = None,
+                 sensors: dict | None = None) -> None:
         self._registry = registry
+        self._sensors = sensors
         self._broker = broker
         self._port = port
         self._user = user
@@ -109,9 +114,20 @@ class DeviceListener:
         def on_connect(c, u, flags, rc, props=None):
             c.subscribe("eco/v1/devices/+/manifest", qos=1)
             c.subscribe("eco/v1/devices/+/state", qos=1)
+            if self._sensors is not None:
+                c.subscribe("eco/v1/devices/+/evt", qos=1)
 
         def on_message(c, u, msg):
             kind = msg.topic.rsplit("/", 1)[-1]
+            if kind == "evt":
+                try:
+                    ev = json.loads(msg.payload)
+                except ValueError:
+                    return
+                if isinstance(ev, dict) and "temperature_c" in ev:
+                    self._sensors.update(temperature_c=ev["temperature_c"],
+                                         humidity=ev.get("humidity"), ts=now_ms())
+                return
             if kind == "manifest":
                 try:
                     m = Manifest.model_validate_json(msg.payload)

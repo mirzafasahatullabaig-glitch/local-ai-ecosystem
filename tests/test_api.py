@@ -170,3 +170,98 @@ def test_device_action_no_matching_device_404(bus_client):
     # no device offers 'ping' -> 404, not a fake success
     r = client.post("/ask", json={"text": "ping all devices"})
     assert r.status_code == 404
+
+
+# --- LLM prompt context, voice style, TFT mirror ---
+
+import time  # noqa: E402
+
+import backend.api.main as api_main  # noqa: E402
+from schemas.messages import now_ms  # noqa: E402
+
+
+def _capturing_app(tmp_path, sensors=None, bus=None, answer="ok"):
+    prompts = []
+
+    def handler(req):
+        if req.url.path == "/api/ps":
+            return httpx.Response(200, json={"models": []})
+        import json
+        prompts.append(json.loads(req.content)["prompt"])
+        return httpx.Response(200, json={**OK_BODY, "response": answer})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler),
+                        base_url="http://127.0.0.1:11434")
+    app = create_app(SQLiteRepository(str(tmp_path / "t.db")), ModelGateway(http),
+                     bus=bus, sensors=sensors)
+    return TestClient(app), prompts
+
+
+def test_llm_prompt_includes_fresh_room_reading(tmp_path):
+    sensors = {"temperature_c": 24.5, "humidity": 54, "ts": now_ms()}
+    c, prompts = _capturing_app(tmp_path, sensors=sensors)
+    assert c.post("/ask", json={"text": "is it warm in here"}).status_code == 200
+    assert "24.5°C" in prompts[0] and "54% humidity" in prompts[0]
+    assert prompts[0].endswith("is it warm in here")
+    assert api_main.VOICE_STYLE not in prompts[0]   # /ask keeps full answers
+
+
+def test_llm_prompt_skips_stale_or_missing_reading(tmp_path):
+    stale = {"temperature_c": 30.0, "humidity": None, "ts": now_ms() - 3_600_000}
+    c, prompts = _capturing_app(tmp_path, sensors=stale)
+    c.post("/ask", json={"text": "what is MQTT"})
+    assert prompts[0] == "what is MQTT"
+
+
+def test_listen_uses_voice_style(tmp_path, monkeypatch):
+    seg = type("Seg", (), {"text": " what is MQTT "})
+    fake = type("STT", (), {"transcribe": lambda self, p, beam_size=1: ([seg], None)})()
+    monkeypatch.setattr(api_main, "_STT", fake)
+    c, prompts = _capturing_app(tmp_path)
+    r = c.post("/listen", files={"audio": ("clip.wav", b"RIFF0000", "audio/wav")})
+    assert r.status_code == 200 and r.json()["transcript"] == "what is MQTT"
+    assert prompts[0].startswith(api_main.VOICE_STYLE)
+
+
+def test_answer_mirrored_trimmed_to_tft(tmp_path):
+    bus = FakeBus()
+    long = "word " * 60
+    c, _ = _capturing_app(tmp_path, bus=bus, answer=long)
+    c.post("/devices/register", json={
+        "msg_id": "m", "device_id": "raspberrypi", "ts": 1, "device_type": "pi",
+        "hw": "x", "fw_version": "0.1", "protocol_version": 1,
+        "capabilities": [{"name": "tft_show", "max_duration_ms": 1000,
+                          "physical": True, "risk": "none"}]})
+    r = c.post("/ask", json={"text": "what is MQTT"})
+    assert r.json()["answer"] == long          # HTTP answer stays full
+    for _ in range(50):                        # mirror runs on a background thread
+        if bus.sent:
+            break
+        time.sleep(0.02)
+    text = bus.sent[0].params["text"]
+    assert bus.sent[0].action == "tft_show"
+    assert len(text) <= 114 and text.endswith(" ...")
+
+
+def test_room_question_triggers_fresh_dht_read(tmp_path):
+    sensors = {}
+
+    class DhtBus(FakeBus):
+        # stands in for the DeviceListener catching the read_dht result evt
+        def send_command(self, cmd, collect_ms=2500):
+            if cmd.action == "read_dht":
+                sensors.update(temperature_c=26.0, humidity=50, ts=now_ms())
+            return super().send_command(cmd, collect_ms)
+
+    bus = DhtBus()
+    c, prompts = _capturing_app(tmp_path, sensors=sensors, bus=bus)
+    c.post("/devices/register", json={
+        "msg_id": "m", "device_id": "esp32_dev_01", "ts": 1, "device_type": "esp32",
+        "hw": "x", "fw_version": "0.3", "protocol_version": 1,
+        "capabilities": [{"name": "read_dht", "max_duration_ms": 1000,
+                          "physical": False, "risk": "none"}]})
+    c.post("/ask", json={"text": "what is MQTT"})          # not a room question
+    assert not any(s.action == "read_dht" for s in bus.sent)
+    c.post("/ask", json={"text": "what is the temperature"})
+    assert any(s.action == "read_dht" for s in bus.sent)
+    assert "26.0°C" in prompts[-1]

@@ -46,11 +46,18 @@ User environment variables:
 
 ```powershell
 .\scripts\free_gpu.ps1                 # always free the GPU first
-uvicorn backend.api.main:app --host 127.0.0.1
+.\scripts\start-station.bat            # loads .env.mqtt, serves :8000 for the Pi, logs to api.log
 ```
 
+`start-station.bat` also runs at logon (shortcut "eco station" in the Windows
+Startup folder) and exits if :8000 is already taken, so it never starts twice.
+Speech-to-text runs on CPU (`ECO_STT_DEVICE=cpu` default); set it to `cuda`
+once cuBLAS is set up.
+
 Endpoints: `GET /health`, `GET /models`, `GET /devices`,
-`POST /devices/register`, `POST /ask`, `GET /tasks`.
+`POST /devices/register`, `POST /ask`, `POST /listen`, `GET /tasks`.
+Room questions ("what's the temperature") make the station ask the ESP for a
+fresh DHT reading and give it to the LLM; `/listen` answers are kept short.
 
 `POST /ask` examples:
 - `{"text":"list devices"}` → deterministic, no model call.
