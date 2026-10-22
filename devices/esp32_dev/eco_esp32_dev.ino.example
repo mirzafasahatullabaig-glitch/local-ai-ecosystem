@@ -9,7 +9,7 @@
  *
  * Wiring (common defaults — rewire or edit these to match your board):
  *   DHT11  data  -> GPIO 4   (+ 10k pullup data->3V3 recommended)
- *   Buzzer +     -> GPIO 5   (passive buzzer; - to GND)
+ *   Buzzer +     -> GPIO 5   (active buzzer; - to GND)
  *   OLED   SDA   -> GPIO 21,  SCL -> GPIO 22,  VCC 3V3, GND GND
  *   Onboard LED  -> GPIO 2
  */
@@ -42,7 +42,7 @@ static const int   PROTOCOL_VERSION = 1;
 // --- pins (edit to match your wiring) ---
 static const int LED_PIN   = 2;    // onboard blue LED
 static const int DHT_PIN   = 4;    // DHT11 data
-static const int BUZZ_PIN  = 5;    // passive buzzer
+static const int BUZZ_PIN  = 5;    // active buzzer
 static const int OLED_SDA  = 21;   // I2C
 static const int OLED_SCL  = 22;
 static const uint8_t OLED_ADDR = 0x3C; // common SSD1306 address (some are 0x3D)
@@ -156,7 +156,7 @@ void publishManifest() {
   doc["ts"]               = nowMs();
   doc["device_type"]      = "esp32";
   doc["hw"]               = "esp32-devkit";
-  doc["fw_version"]       = "0.2";  // bumped: added dht11/oled/buzzer
+  doc["fw_version"]       = "0.4";  // OTA, temp alert, ASCII status icons
   doc["protocol_version"] = PROTOCOL_VERSION;
   JsonArray caps = doc["capabilities"].to<JsonArray>();
   auto addCap = [&](const char* name, int dur, bool phys, const char* risk) {

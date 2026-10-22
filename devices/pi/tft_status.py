@@ -14,8 +14,10 @@ Run (needs GPIO -> sudo, with the venv python):
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
+import textwrap
 import time
 
 import spidev
@@ -26,6 +28,7 @@ from PIL import Image, ImageDraw, ImageFont
 CS, DC, RST = 8, 24, 25
 WIDTH, HEIGHT = 320, 480   # ILI9486 native portrait
 
+GPIO.setwarnings(False)   # pins stay claimed across service restarts; harmless
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(DC, GPIO.OUT)
 GPIO.setup(RST, GPIO.OUT)
@@ -63,13 +66,8 @@ def blit(img: Image.Image) -> None:
     command(0x2A); data([0, 0, (WIDTH - 1) >> 8, (WIDTH - 1) & 0xFF])
     command(0x2B); data([0, 0, (HEIGHT - 1) >> 8, (HEIGHT - 1) & 0xFF])
     command(0x2C)
-    px = img.load()
-    buf = []
-    for y in range(HEIGHT):
-        for x in range(WIDTH):
-            r, g, b = px[x, y][:3]
-            buf += [r >> 2, g >> 2, b >> 2]
-    data(buf)
+    # Same bytes as the old per-pixel loop (R,G,B each >>2), built in C by Pillow.
+    data(list(img.convert("RGB").point(lambda v: v >> 2).tobytes()))
 
 
 # --- rendering ---
@@ -100,16 +98,22 @@ FONT_SM = load_font(16)
 EMOJI = load_emoji(109)
 
 
+@functools.lru_cache(maxsize=32)
+def emoji_tile(emoji: str, size: int) -> Image.Image:
+    """NotoColorEmoji is a fixed-strike bitmap font (only 109px), so draw at 109
+    and downscale. Cached: the same few emoji are redrawn every frame."""
+    tile = Image.new("RGBA", (109, 109), (0, 0, 0, 0))
+    ImageDraw.Draw(tile).text((0, 0), emoji, font=EMOJI, embedded_color=True)
+    return tile.resize((size, size), Image.LANCZOS)
+
+
 def emoji_text(img, xy, emoji, text, font, fill):
-    """Draw `emoji text` onto `img` at xy. NotoColorEmoji is a fixed-strike
-    bitmap font (only 109px), so the glyph is drawn at 109 then downscaled and
-    alpha-pasted. Falls back to text-only if the emoji font didn't load."""
+    """Draw `emoji text` onto `img` at xy. Falls back to text-only if the
+    emoji font didn't load."""
     x, y = xy
     size = font.size if hasattr(font, "size") else 20
     if EMOJI is not None and emoji:
-        tile = Image.new("RGBA", (109, 109), (0, 0, 0, 0))
-        ImageDraw.Draw(tile).text((0, 0), emoji, font=EMOJI, embedded_color=True)
-        g = tile.resize((size, size), Image.LANCZOS)
+        g = emoji_tile(emoji, size)
         img.paste(g, (x, y), g)   # alpha mask keeps the panel background
         x += int(size * 1.2)
     if text:
@@ -118,6 +122,8 @@ def emoji_text(img, xy, emoji, text, font, fill):
 
 
 FACE_H = 210   # top region for the bot face; status + MSG + temp fill the rest
+MSG_FILE = "/tmp/eco_tft_msg.txt"
+MSG_TTL_S = 90  # a message (and its talking/alert face) fades after this
 
 # Per-mood accent colour + a short caption shown under the face.
 MOODS = {
@@ -155,9 +161,12 @@ def draw_face(img, mood: str, blink: bool) -> None:
             d.ellipse([ex - r, eye_y - r, ex + r, eye_y + r], fill=accent)
             d.ellipse([ex + 4, eye_y - 10, ex + 14, eye_y], fill=(255, 255, 255))
 
-    # mouth: smile when idle/speaking, flat when offline, open 'O' on alert.
+    # mouth: smile when idle, flat when offline, 'O' on alert; when speaking it
+    # alternates open/smile across redraws so the bot looks like it's talking.
     mx, my, mw = cx, cy + 46, 54
-    if mood == "alert":
+    if mood == "speaking" and int(time.time()) % 4 < 2:
+        d.ellipse([mx - 30, my - 8, mx + 30, my + 18], fill=accent)
+    elif mood == "alert":
         d.ellipse([mx - 22, my - 16, mx + 22, my + 20], outline=accent, width=6)
     elif mood == "offline":
         d.line([mx - mw, my, mx + mw, my], fill=accent, width=6)
@@ -175,10 +184,14 @@ def render(devices: dict, reading: dict) -> Image.Image:
     img = Image.new("RGB", (WIDTH, HEIGHT), (10, 12, 20))
     d = ImageDraw.Draw(img)
 
-    # Latest agent message drives both the MSG band and the face mood.
+    # Latest agent message drives both the MSG band and the face mood. The file
+    # is never cleared by the agent, so treat it as stale after MSG_TTL_S.
     try:
-        with open("/tmp/eco_tft_msg.txt") as f:
-            msg = f.read().strip()
+        if time.time() - os.path.getmtime(MSG_FILE) > MSG_TTL_S:
+            msg = ""
+        else:
+            with open(MSG_FILE) as f:
+                msg = f.read().strip()
     except OSError:
         msg = ""
 
@@ -205,8 +218,11 @@ def render(devices: dict, reading: dict) -> Image.Image:
     if t is not None:
         d.text((WIDTH - 78, y0 + 8), f"{t:.1f}°C", font=FONT, fill=(170, 225, 255))
 
+    msg_bottom = HEIGHT - 72   # keep clear of the temp band (bottom 70px)
     y = y0 + 44
     for name, info in sorted(devices.items()):
+        if y + 30 > msg_bottom:   # too many devices: stop before the temp band
+            break
         live = info.get("live")
         emoji_text(img, (12, y), "🟢" if live else "🔴", name, FONT_SM, (235, 235, 235))
         age = info.get("age")
@@ -214,15 +230,14 @@ def render(devices: dict, reading: dict) -> Image.Image:
         d.text((WIDTH - 90, y + 1), label, font=FONT_SM, fill=(150, 160, 175))
         y += 30
 
-    msg_bottom = HEIGHT - 72   # keep clear of the temp band (bottom 70px)
     if msg and y + 4 + 24 + 18 <= msg_bottom:   # room for the label + >=1 line
-        import textwrap
         band_top = y + 4
         # Only as many lines as physically fit above the temp band — never draw
         # into it. The label eats the first 24px, each line 18px.
-        fit = max(0, (msg_bottom - band_top - 24) // 18)
-        lines = textwrap.wrap(msg, width=26)[:fit]
-        if textwrap.wrap(msg, width=26)[fit:]:   # truncated -> mark it
+        fit = (msg_bottom - band_top - 24) // 18
+        wrapped = textwrap.wrap(msg, width=26)
+        lines = wrapped[:fit]
+        if len(wrapped) > fit:   # truncated -> mark it
             lines[-1] = lines[-1][:23] + "..."
         band_bot = band_top + 24 + len(lines) * 18
         d.rectangle([0, band_top, WIDTH, band_bot], fill=(70, 40, 20))
@@ -235,7 +250,8 @@ def render(devices: dict, reading: dict) -> Image.Image:
         t = reading.get("temperature_c")
         h = reading.get("humidity")
         if t is not None:
-            emoji_text(img, (12, HEIGHT - 60), "🌡", f"{t:.1f}C  {h:.0f}% RH",
+            hum = f"  {h:.0f}% RH" if h is not None else ""   # DHT may omit it
+            emoji_text(img, (12, HEIGHT - 60), "🌡", f"{t:.1f}°C{hum}",
                        FONT_TITLE, (120, 220, 255))
     d.text((WIDTH - 90, HEIGHT - 24), time.strftime("%H:%M:%S"), font=FONT_SM,
            fill=(120, 130, 145))

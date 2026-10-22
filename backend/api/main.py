@@ -241,9 +241,9 @@ def create_app(repo: Repository, gateway: ModelGateway,
         if bus is not None:
             # The TFT MSG band fits ~4 short lines; send a trimmed answer so it
             # isn't clipped mid-word. The HTTP `answer` below stays full.
-            tft_text = " ".join(result.text.split())[:110]
-            if len(" ".join(result.text.split())) > 110:
-                tft_text = tft_text.rsplit(" ", 1)[0] + " ..."
+            tft_text = " ".join(result.text.split())
+            if len(tft_text) > 110:
+                tft_text = tft_text[:110].rsplit(" ", 1)[0] + " ..."
             for dev in registry.find_by_capability("tft_show"):
                 try:
                     cmd = build_command(dev["device_id"], "tft_show",
