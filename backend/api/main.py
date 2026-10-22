@@ -7,16 +7,19 @@ model and metrics.
 """
 from __future__ import annotations
 
+import collections
+import json
 import logging
 import os
 import tempfile
 import threading
 import time
 import uuid
+from pathlib import Path
 
 import httpx
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 # Lazy singleton: faster-whisper model load is slow, do it once. The uvicorn
@@ -45,6 +48,20 @@ SENSOR_REFRESH_MS = 60_000        # room questions re-read the DHT if older than
 _ROOM_WORDS = ("temp", "hot", "cold", "warm", "humid", "weather", "room")
 # Don't mention the screen here: llama3.2:3b parrots it back into the answer.
 VOICE_STYLE = "Reply in one or two short sentences."
+TEMP_ALERT_C = 33.0      # same threshold the ESP uses for its HOT alert
+SPEAKING_MS = 90_000     # panel face shows "talking" this long after an answer
+
+# Actions the web panel may send to a device. Fixed and server-side: the browser
+# picks one of these names, never arbitrary actions or params. `update` (self-
+# update, risk high) and estop are deliberately not here.
+_PANEL_ACTIONS = {
+    "ping":      lambda text: {},
+    "blink_led": lambda text: {"ms": 500},
+    "beep":      lambda text: {"ms": 300},
+    "read_dht":  lambda text: {},
+    "tft_show":  lambda text: {"text": text[:110]},
+    "oled_show": lambda text: {"line1": text[:21]},   # 21 chars = one OLED line
+}
 
 
 def _llm_prompt(text: str, sensors: dict | None, voice: bool) -> str:
@@ -87,93 +104,23 @@ class AskRequest(BaseModel):
     text: str
 
 
-_INDEX_HTML = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>local-ai-ecosystem</title>
-<style>
-  :root { --bg:#0f1115; --card:#1a1d24; --fg:#e6e6e6; --mut:#8b93a1;
-          --ok:#3ecf8e; --bad:#e5534b; --accent:#5b9bff; }
-  * { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--fg);
-      font:15px/1.5 system-ui,sans-serif; padding:16px; }
-  h1 { font-size:20px; margin:0 0 4px; } .mut { color:var(--mut); font-size:13px; }
-  .card { background:var(--card); border-radius:10px; padding:14px; margin:12px 0; }
-  .dev { display:flex; justify-content:space-between; padding:6px 0;
-         border-bottom:1px solid #2a2e37; } .dev:last-child { border:0; }
-  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:6px; }
-  .live { background:var(--ok); } .stale { background:var(--bad); }
-  input,button { font:inherit; } input[type=text] { width:100%; padding:10px;
-    border-radius:8px; border:1px solid #2a2e37; background:#0c0e12; color:var(--fg); }
-  button { padding:9px 14px; border-radius:8px; border:0; background:var(--accent);
-    color:#fff; cursor:pointer; margin:6px 6px 0 0; } button.alt { background:#2a2e37; }
-  pre { background:#0c0e12; padding:12px; border-radius:8px; overflow:auto;
-    white-space:pre-wrap; word-break:break-word; max-height:50vh; }
-  .states span { display:inline-block; padding:2px 7px; margin:2px; border-radius:6px;
-    background:#23303f; font-size:12px; }
-</style></head><body>
-<h1>local-ai-ecosystem</h1>
-<div class="mut">Phase 2 control panel &middot; talks to the live API and devices</div>
+class ActionRequest(BaseModel):
+    action: str
+    text: str = ""
 
-<div class="card"><b>Devices</b> <span class="mut" id="devcount"></span>
-  <div id="devices" class="mut">loading&hellip;</div></div>
 
-<div class="card">
-  <input id="ask" type="text" placeholder='Ask something, or try "ping all devices"'
-         value="what is MQTT">
-  <div>
-    <button onclick="send()">Ask</button>
-    <button class="alt" onclick="quick('ping all devices')">Ping all</button>
-    <button class="alt" onclick="quick('list devices')">List devices</button>
-    <button class="alt" onclick="quick('estop')">E-stop</button>
-  </div>
-</div>
-
-<div class="card"><b>Result</b><pre id="out">—</pre></div>
-
-<script>
-async function loadDevices() {
-  try {
-    const r = await fetch('/devices'); const j = await r.json();
-    const el = document.getElementById('devices');
-    document.getElementById('devcount').textContent = '(' + j.devices.length + ')';
-    if (!j.devices.length) { el.textContent = 'none registered'; return; }
-    el.innerHTML = j.devices.map(d => {
-      const live = !d.stale && d.online;
-      const caps = (d.capabilities||[]).map(c => c.name).join(', ');
-      return `<div class="dev"><span><span class="dot ${live?'live':'stale'}"></span>
-        <b>${d.device_id}</b> <span class="mut">${d.device_type||''} &middot; ${caps}</span></span>
-        <span class="mut">${live?'live':'stale'}</span></div>`;
-    }).join('');
-  } catch(e) { document.getElementById('devices').textContent = 'API unreachable'; }
-}
-function quick(t){ document.getElementById('ask').value = t; send(); }
-async function send() {
-  const text = document.getElementById('ask').value;
-  const out = document.getElementById('out'); out.textContent = 'sending…';
-  try {
-    const r = await fetch('/ask', {method:'POST',
-        headers:{'Content-Type':'application/json', 'X-API-Key':'__API_KEY__'},
-        body: JSON.stringify({text})});
-    const j = await r.json();
-    if (j.answer) { out.textContent = j.answer + '\\n\\n[' + j.model + ', ' +
-        j.metrics.tokens_per_s + ' tok/s]'; }
-    else if (j.results) {
-      out.innerHTML = j.results.map(x => `<b>${x.device_id}</b><div class="states">` +
-        x.states.map(s=>`<span>${s}</span>`).join('') + '</div>').join('');
-    } else { out.textContent = JSON.stringify(j, null, 2); }
-  } catch(e) { out.textContent = 'error: ' + e; }
-  loadDevices();
-}
-loadDevices(); setInterval(loadDevices, 3000);
-</script></body></html>"""
+# The web panel lives in panel.html next to this file (too big to inline).
+_PANEL_HTML = (Path(__file__).with_name("panel.html")).read_text(encoding="utf-8")
 
 
 def create_app(repo: Repository, gateway: ModelGateway,
                bus: "DeviceBus | None" = None,
                api_key: str | None = None,
-               sensors: dict | None = None) -> FastAPI:
+               sensors: dict | None = None,
+               event_log=None) -> FastAPI:
     app = FastAPI(title="local-ai-ecosystem", version="1")
     registry = DeviceRegistry(repo)
+    last: dict = {}   # most recent LLM question/answer, for the panel
 
     def require_key(x_api_key: str | None = Header(default=None)) -> None:
         # No key configured -> open (dev default). Configured -> must match.
@@ -181,9 +128,12 @@ def create_app(repo: Repository, gateway: ModelGateway,
             raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
 
     @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
-        # Embed the key so the same-origin page can call /ask. localhost only.
-        return _INDEX_HTML.replace("__API_KEY__", api_key or "")
+    def index(request: Request) -> str:
+        # Embed the key only for the laptop's own browser: the server binds
+        # 0.0.0.0, so otherwise anyone on the LAN could read it from the page.
+        # Other browsers ask for it once and keep it in localStorage.
+        local = request.client is not None and request.client.host in ("127.0.0.1", "::1")
+        return _PANEL_HTML.replace("__API_KEY__", (api_key or "") if local else "")
 
     @app.get("/health")
     def health() -> dict:
@@ -300,22 +250,28 @@ def create_app(repo: Repository, gateway: ModelGateway,
         except GatewayError as e:
             log.warning("ask tier=llm role=%s FAILED: %s", decision.role, e)
             raise HTTPException(status_code=502, detail=str(e))
+        return _finish_llm(text, decision.role, result, task_id, voice)
 
+    def _finish_llm(text: str, role: str, result, task_id: str, voice: bool) -> dict:
+        """Shared tail of /ask, /listen and /ask/stream: log, record the task,
+        mirror to the TFT, remember it for the panel, build the response."""
         m = result.metrics
         log.info(
             "ask tier=llm role=%s model=%s fell_back=%s total_ms=%s tok/s=%s",
-            decision.role, result.model, result.fell_back, m.total_ms, m.tokens_per_s,
+            role, result.model, result.fell_back, m.total_ms, m.tokens_per_s,
         )
         repo.add_task(task_id, {"created_at": now_ms(), "text": text,
-                                "role": decision.role, "model": result.model})
+                                "role": role, "model": result.model})
         # Mirror the answer to any device that can show it (the Pi TFT). Reuses
         # the proven tft_show path; best-effort, never delays the HTTP answer.
         if bus is not None:
             threading.Thread(target=_mirror_to_tft, args=(result.text,),
                              daemon=True).start()
+        last.update(text=text, answer=result.text, voice=voice,
+                    model=result.model, ts=now_ms())
         return {
             "tier": "llm",
-            "role": decision.role,
+            "role": role,
             "model": result.model,
             "fell_back": result.fell_back,
             "answer": result.text,
@@ -323,9 +279,84 @@ def create_app(repo: Repository, gateway: ModelGateway,
             "task_id": task_id,
         }
 
+    def _mood(devs: list[dict], now: int) -> str:
+        """Same moods as the Pi TFT face, decided server-side for the panel."""
+        if devs and not any(not d.get("stale") and d.get("online", True) for d in devs):
+            return "offline"
+        s = sensors or {}
+        if s.get("temperature_c") is not None and s["temperature_c"] >= TEMP_ALERT_C \
+                and now - s.get("ts", 0) < SENSOR_MAX_AGE_MS:
+            return "alert"
+        if last.get("ts") and now - last["ts"] < SPEAKING_MS:
+            return "speaking"
+        return "idle"
+
+    @app.get("/status", dependencies=[Depends(require_key)])
+    def status() -> dict:
+        """Everything the panel shows, in one poll. Keyed: it includes the last
+        question and answer."""
+        now = now_ms()
+        devs = registry.list(now=now)
+        return {"ts": now, "mood": _mood(devs, now), "sensors": dict(sensors or {}),
+                "devices": devs, "last": dict(last) or None,
+                "log": list(event_log or [])[::-1]}
+
+    @app.post("/devices/{device_id}/action", dependencies=[Depends(require_key)])
+    def device_action(device_id: str, req: ActionRequest) -> dict:
+        """One panel button press: a whitelisted action on one live device."""
+        if req.action not in _PANEL_ACTIONS:
+            raise HTTPException(status_code=422,
+                                detail=f"action {req.action!r} is not allowed from the panel")
+        if bus is None:
+            raise HTTPException(status_code=501, detail="no messaging layer configured")
+        dev = next((d for d in registry.list() if d["device_id"] == device_id), None)
+        if dev is None or dev.get("stale") or not dev.get("online", True):
+            raise HTTPException(status_code=404, detail=f"{device_id} is not live")
+        if req.action not in {c["name"] for c in dev.get("capabilities", [])}:
+            raise HTTPException(status_code=422,
+                                detail=f"{device_id} does not offer {req.action!r}")
+        cmd = build_command(device_id, req.action, _PANEL_ACTIONS[req.action](req.text),
+                            user="panel")
+        states = [e.state.value for e in bus.send_command(cmd)]
+        log.info("panel action=%s device=%s states=%s", req.action, device_id, states)
+        return {"device_id": device_id, "action": req.action, "states": states}
+
     @app.post("/ask", dependencies=[Depends(require_key)])
     def ask(req: AskRequest) -> dict:
         return _answer(req.text)
+
+    @app.post("/ask/stream", dependencies=[Depends(require_key)])
+    def ask_stream(req: AskRequest) -> StreamingResponse:
+        """Same routing as /ask, but LLM answers arrive piece by piece as
+        server-sent events: {"t":"chunk","text":...} then {"t":"done",...}.
+        Deterministic actions and errors arrive as one event."""
+        def sse(obj: dict) -> str:
+            return f"data: {json.dumps(obj)}\n\n"
+
+        def events():
+            decision = route(req.text)
+            if decision.tier == "deterministic":
+                try:
+                    yield sse({"t": "done", **_answer(req.text)})
+                except HTTPException as e:
+                    yield sse({"t": "error", "detail": e.detail})
+                return
+            task_id = uuid.uuid4().hex
+            _refresh_room_reading(req.text)
+            gen = gateway.stream(decision.role, _llm_prompt(req.text, sensors, False))
+            try:
+                while True:
+                    yield sse({"t": "chunk", "text": next(gen)})
+            except StopIteration as stop:
+                yield sse({"t": "done", **_finish_llm(req.text, decision.role,
+                                                      stop.value, task_id, False)})
+            except GatewayError as e:
+                log.warning("ask/stream role=%s FAILED: %s", decision.role, e)
+                yield sse({"t": "error", "detail": str(e)})
+
+        # Sync generator: Starlette iterates it in a worker thread, so the
+        # blocking Ollama stream doesn't stall the event loop.
+        return StreamingResponse(events(), media_type="text/event-stream")
 
     @app.post("/listen", dependencies=[Depends(require_key)])
     def listen(audio: UploadFile = File(...)) -> dict:
@@ -355,6 +386,10 @@ def create_app(repo: Repository, gateway: ModelGateway,
 
 def _build_default_app() -> FastAPI:
     """Wire real SQLite + Ollama for uvicorn. Not used by tests."""
+    # uvicorn only configures its own loggers; without this every eco.api
+    # log.info (asks, transcripts, panel actions) was silently dropped.
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     db = os.environ.get("ECO_DB_PATH", "eco.db")
     host = os.environ.get("OLLAMA_HOST", "127.0.0.1:11434")
     host = host.replace("http://", "").replace("https://", "")  # env var may carry a scheme
@@ -371,12 +406,14 @@ def _build_default_app() -> FastAPI:
     from backend.messaging.bus import DeviceListener, MqttDeviceBus
     bus = MqttDeviceBus(broker, port, mq_user, mq_pass)
     sensors: dict = {}   # filled by the listener, read by the LLM prompt
+    event_log = collections.deque(maxlen=40)   # filled by the listener, shown on the panel
     app = create_app(SQLiteRepository(db), gateway, bus=bus,
-                     api_key=os.environ.get("ECO_API_KEY"), sensors=sensors)
+                     api_key=os.environ.get("ECO_API_KEY"), sensors=sensors,
+                     event_log=event_log)
     # Background listener auto-registers devices and keeps them live from their
     # retained manifest + periodic state, so the web UI shows real status.
     listener = DeviceListener(DeviceRegistry(SQLiteRepository(db)), broker, port,
-                              mq_user, mq_pass, sensors=sensors)
+                              mq_user, mq_pass, sensors=sensors, log=event_log)
     listener.start()
     app.state.listener = listener
     # Load Whisper now so the first voice turn isn't a multi-second cold start.

@@ -93,14 +93,17 @@ class DeviceListener:
     announce a manifest are registered; a manifest or state message refreshes
     their heartbeat. Lets devices self-register instead of the laptop POSTing.
     If `sensors` is given, the latest DHT reading seen on any evt is kept in it
-    so the API can tell the LLM about the room.
+    so the API can tell the LLM about the room. If `log` (a bounded deque) is
+    given, announcements, command events and offline notices are appended to
+    it for the web panel — heartbeats are not, they'd drown everything else.
     """
 
     def __init__(self, registry, broker: str, port: int = 1883,
                  user: str | None = None, password: str | None = None,
-                 sensors: dict | None = None) -> None:
+                 sensors: dict | None = None, log=None) -> None:
         self._registry = registry
         self._sensors = sensors
+        self._log = log
         self._broker = broker
         self._port = port
         self._user = user
@@ -111,33 +114,51 @@ class DeviceListener:
         import paho.mqtt.client as mqtt
         from schemas.messages import Manifest, now_ms
 
+        def note(device_id: str, text: str) -> None:
+            if self._log is not None:
+                self._log.append({"ts": now_ms(), "device": device_id, "text": text})
+
         def on_connect(c, u, flags, rc, props=None):
             c.subscribe("eco/v1/devices/+/manifest", qos=1)
             c.subscribe("eco/v1/devices/+/state", qos=1)
-            if self._sensors is not None:
+            if self._sensors is not None or self._log is not None:
                 c.subscribe("eco/v1/devices/+/evt", qos=1)
 
         def on_message(c, u, msg):
-            kind = msg.topic.rsplit("/", 1)[-1]
+            device_id, kind = msg.topic.split("/")[3], msg.topic.rsplit("/", 1)[-1]
             if kind == "evt":
                 try:
                     ev = json.loads(msg.payload)
                 except ValueError:
                     return
-                if isinstance(ev, dict) and "temperature_c" in ev:
-                    self._sensors.update(temperature_c=ev["temperature_c"],
-                                         humidity=ev.get("humidity"), ts=now_ms())
+                if not isinstance(ev, dict):
+                    return
+                text = str(ev.get("state", "event"))
+                if "temperature_c" in ev:
+                    text += f" {ev['temperature_c']}°C {ev.get('humidity')}%"
+                    if self._sensors is not None:
+                        self._sensors.update(temperature_c=ev["temperature_c"],
+                                             humidity=ev.get("humidity"), ts=now_ms())
+                note(device_id, text)
                 return
             if kind == "manifest":
                 try:
                     m = Manifest.model_validate_json(msg.payload)
                     self._registry.register(m)
                     self._registry.heartbeat(m.device_id)
+                    note(m.device_id, f"announced fw {m.fw_version}")
                 except Exception:  # noqa: BLE001 - ignore malformed announcements
                     pass
             elif kind == "state":
-                device_id = msg.topic.split("/")[3]
-                self._registry.heartbeat(device_id, now_ms())
+                try:
+                    online = json.loads(msg.payload).get("online", True)
+                except (ValueError, AttributeError):
+                    online = True
+                if online:
+                    self._registry.heartbeat(device_id, now_ms())
+                else:   # last-will: the broker saw the device drop
+                    self._registry.mark_offline(device_id)
+                    note(device_id, "went offline")
 
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
                                    client_id="eco-api-listener")

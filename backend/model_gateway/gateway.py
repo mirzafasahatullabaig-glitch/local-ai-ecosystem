@@ -8,6 +8,7 @@ not touched here.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -127,20 +128,20 @@ class ModelGateway:
         r.raise_for_status()
         return r.json()
 
+    def _prepare(self, model: str) -> tuple[dict, object]:
+        """(options, keep_alive) for a call; evicts other models for specialists."""
+        if model == WARM:
+            return {"num_ctx": PRIMARY_NUM_CTX}, -1
+        # specialist: clear VRAM first so two models never co-reside
+        self._ensure_only(model)
+        return {}, "2m"
+
     def _call_one(self, model: str, prompt: str) -> GatewayResult:
-        is_warm = model == WARM
-        if is_warm:
-            options = {"num_ctx": PRIMARY_NUM_CTX}
-            keep_alive = -1
-        else:
-            # specialist: clear VRAM first so two models never co-reside
-            self._ensure_only(model)
-            options = {}
-            keep_alive = "2m"
+        options, keep_alive = self._prepare(model)
 
         body = self._generate(model, prompt, keep_alive, options)
 
-        if not is_warm:
+        if model != WARM:
             self._warm_primary()  # restore the warm default
 
         return GatewayResult(
@@ -175,6 +176,53 @@ class ModelGateway:
             except (httpx.HTTPError, httpx.TimeoutException) as e:
                 last_err = e
                 continue
+
+        raise GatewayError(
+            f"all models failed for role {role}: tried {tried} ({last_err})"
+        )
+
+    def stream(self, role: str, prompt: str):
+        """Like generate(), but a generator: yields text pieces as Ollama makes
+        them and returns the final GatewayResult (StopIteration.value). Falls
+        back only if a model fails before its first piece — a half-streamed
+        answer can't be retried cleanly."""
+        if role not in ROLE_MODELS:
+            raise GatewayError(f"unknown role: {role}")
+
+        tried: list[str] = []
+        last_err: Optional[Exception] = None
+        for i, model in enumerate(self._models_for(role)):
+            tried.append(model)
+            parts: list[str] = []
+            try:
+                options, keep_alive = self._prepare(model)
+                final: dict = {}
+                with self._client.stream(
+                    "POST", "/api/generate",
+                    json={"model": model, "prompt": prompt, "stream": True,
+                          "keep_alive": keep_alive, "options": options},
+                    timeout=self._timeout,
+                ) as r:
+                    r.raise_for_status()
+                    for line in r.iter_lines():
+                        if not line:
+                            continue
+                        body = json.loads(line)
+                        piece = body.get("response", "")
+                        if piece:
+                            parts.append(piece)
+                            yield piece
+                        if body.get("done"):
+                            final = body
+                if model != WARM:
+                    self._warm_primary()
+                return GatewayResult(text="".join(parts), model=model,
+                                     metrics=_metrics_from_response(model, final),
+                                     fell_back=i > 0, tried=tried)
+            except (httpx.HTTPError, httpx.TimeoutException) as e:
+                if parts:
+                    raise GatewayError(f"{model} failed mid-answer: {e}") from e
+                last_err = e
 
         raise GatewayError(
             f"all models failed for role {role}: tried {tried} ({last_err})"

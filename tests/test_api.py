@@ -265,3 +265,114 @@ def test_room_question_triggers_fresh_dht_read(tmp_path):
     c.post("/ask", json={"text": "what is the temperature"})
     assert any(s.action == "read_dht" for s in bus.sent)
     assert "26.0°C" in prompts[-1]
+
+
+# --- web panel: /status, /devices/{id}/action, /ask/stream ---
+
+def _register(c, device_id, caps):
+    c.post("/devices/register", json={
+        "msg_id": "m", "device_id": device_id, "ts": 1, "device_type": "x",
+        "hw": "x", "fw_version": "0.1", "protocol_version": 1,
+        "capabilities": [{"name": n, "max_duration_ms": 1000, "physical": True,
+                          "risk": "low"} for n in caps]})
+
+
+def test_status_reports_mood_room_and_last_answer(tmp_path):
+    from collections import deque
+    sensors = {"temperature_c": 34.0, "humidity": 40, "ts": now_ms()}
+    log = deque([{"ts": 1, "device": "esp32_dev_01", "text": "completed"}])
+    repo = SQLiteRepository(str(tmp_path / "t.db"))
+    http = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=OK_BODY)),
+                        base_url="http://127.0.0.1:11434")
+    c = TestClient(create_app(repo, ModelGateway(http), sensors=sensors, event_log=log))
+    _register(c, "esp32_dev_01", ["read_dht"])
+    s = c.get("/status").json()
+    assert s["mood"] == "alert"                       # 34°C >= 33°C threshold
+    assert s["sensors"]["temperature_c"] == 34.0
+    assert s["log"][0]["text"] == "completed"
+    sensors["temperature_c"] = 22.0
+    c.post("/ask", json={"text": "what is MQTT"})
+    s = c.get("/status").json()
+    assert s["mood"] == "speaking" and s["last"]["text"] == "what is MQTT"
+
+
+def test_panel_action_whitelist_and_capability_checks(bus_client):
+    client, bus = bus_client                           # arm_01 offers only estop
+    _register(client, "esp32_dev_01", ["beep", "update"])
+    r = client.post("/devices/esp32_dev_01/action", json={"action": "beep"})
+    assert r.status_code == 200 and r.json()["states"][-1] == "completed"
+    assert bus.sent[-1].params == {"ms": 300}          # server picks the params
+    # not on the panel whitelist even though the device offers it
+    assert client.post("/devices/esp32_dev_01/action",
+                       json={"action": "update"}).status_code == 422
+    # whitelisted, but this device doesn't offer it
+    assert client.post("/devices/esp32_dev_01/action",
+                       json={"action": "blink_led"}).status_code == 422
+    assert client.post("/devices/nope/action", json={"action": "ping"}).status_code == 404
+    n = len(bus.sent)
+    assert client.post("/devices/arm_01/action", json={"action": "estop"}).status_code == 422
+    assert len(bus.sent) == n                          # nothing reached a device
+
+
+def test_panel_key_only_embedded_for_loopback(tmp_path):
+    http = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=OK_BODY)),
+                        base_url="http://127.0.0.1:11434")
+    app = create_app(SQLiteRepository(str(tmp_path / "t.db")), ModelGateway(http),
+                     api_key="secret123")
+    assert "secret123" not in TestClient(app).get("/").text            # LAN client
+    assert "secret123" in TestClient(app, client=("127.0.0.1", 5000)).get("/").text
+
+
+def _ndjson(*objs):
+    import json
+    return "\n".join(json.dumps(o) for o in objs).encode()
+
+
+def test_ask_stream_sends_chunks_then_done(tmp_path):
+    def handler(req):
+        if req.url.path == "/api/ps":
+            return httpx.Response(200, json={"models": []})
+        return httpx.Response(200, content=_ndjson(
+            {"response": "MQTT "}, {"response": "is a protocol."},
+            {"response": "", "done": True, "eval_count": 2, "eval_duration": 1_000_000_000,
+             "total_duration": 2_000_000_000}))
+    http = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://127.0.0.1:11434")
+    c = TestClient(create_app(SQLiteRepository(str(tmp_path / "t.db")), ModelGateway(http)))
+    import json
+    events = [json.loads(l[6:]) for l in c.post("/ask/stream", json={"text": "what is MQTT"})
+              .text.split("\n\n") if l.startswith("data: ")]
+    assert [e["t"] for e in events] == ["chunk", "chunk", "done"]
+    assert events[-1]["answer"] == "MQTT is a protocol."
+    assert events[-1]["metrics"]["tokens"] == 2
+    assert len(c.get("/tasks").json()["tasks"]) == 1    # logged like /ask
+
+
+def test_ask_stream_deterministic_is_one_event(client):
+    import json
+    body = client.post("/ask/stream", json={"text": "list devices"}).text
+    events = [json.loads(l[6:]) for l in body.split("\n\n") if l.startswith("data: ")]
+    assert len(events) == 1 and events[0]["action"] == "list_devices"
+
+
+def test_gateway_stream_falls_back_before_first_piece():
+    calls = []
+
+    def handler(req):
+        import json
+        if req.url.path == "/api/ps":
+            return httpx.Response(200, json={"models": []})
+        model = json.loads(req.content).get("model")
+        calls.append(model)
+        if model == "llama3.2:3b" and json.loads(req.content).get("stream"):
+            return httpx.Response(500)                   # primary fails up front
+        return httpx.Response(200, content=_ndjson({"response": "ok", "done": True}))
+    gw = ModelGateway(httpx.Client(transport=httpx.MockTransport(handler),
+                                   base_url="http://127.0.0.1:11434"))
+    gen = gw.stream("reason", "hi")
+    pieces = []
+    try:
+        while True:
+            pieces.append(next(gen))
+    except StopIteration as stop:
+        result = stop.value
+    assert pieces == ["ok"] and result.model == "qwen3.5:4b" and result.fell_back

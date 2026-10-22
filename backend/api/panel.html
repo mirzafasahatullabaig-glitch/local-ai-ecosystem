@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eco station</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --line:#2a2e37; --fg:#e6e6e6; --mut:#8b93a1;
+          --ok:#3ecf8e; --bad:#e5534b; --accent:#5b9bff; --well:#0c0e12;
+          --idle:#5ac8ff; --speaking:#78e6a0; --alert:#ff5a46; --offline:#6e7887; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,sans-serif;
+         padding:16px; max-width:1100px; margin-inline:auto; }
+  header { display:flex; align-items:center; gap:10px; margin-bottom:4px; }
+  h1 { font-size:20px; margin:0; } h2 { font-size:14px; margin:0 0 8px; color:var(--mut);
+       text-transform:uppercase; letter-spacing:.06em; font-weight:600; }
+  .mut { color:var(--mut); font-size:13px; } .grow { flex:1; }
+  /* minmax(0,…): a plain 1fr track grows to its widest line and overflows phones */
+  .grid { display:grid; gap:12px; grid-template-columns:minmax(0,1fr); }
+  @media (min-width:760px) { .grid { grid-template-columns:320px minmax(0,1fr); } }
+  .card { background:var(--card); border-radius:10px; padding:14px; min-width:0; }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; flex:none; }
+  .live { background:var(--ok); } .stale { background:var(--bad); }
+
+  /* face — same moods and colours as the Pi TFT */
+  .face { width:100%; max-width:260px; display:block; margin:0 auto; color:var(--idle); }
+  .face.mood-speaking { color:var(--speaking); } .face.mood-alert { color:var(--alert); }
+  .face.mood-offline { color:var(--offline); }
+  .face .eyes-closed, .face .m { display:none; }
+  .mood-idle .m-smile, .mood-speaking .m-smile, .mood-speaking .m-open,
+  .mood-alert .m-o, .mood-offline .m-flat, .mood-offline .eyes-closed { display:inline; }
+  .mood-offline .eyes-open { display:none; }
+  .eyes-open { transform-box:fill-box; transform-origin:center; animation:blink 5s infinite; }
+  /* talking: open mouth and smile take turns (complementary keyframes, never both) */
+  .mood-speaking .m-open { animation:talk-a .5s steps(1) infinite; }
+  .mood-speaking .m-smile { animation:talk-b .5s steps(1) infinite; }
+  @keyframes blink { 0%,95%,100% { transform:scaleY(1); } 97% { transform:scaleY(.1); } }
+  @keyframes talk-a { 0% { opacity:1; } 50% { opacity:0; } }
+  @keyframes talk-b { 0% { opacity:0; } 50% { opacity:1; } }
+  @media (prefers-reduced-motion:reduce) { .eyes-open, .m { animation:none !important; } }
+  .caption { text-align:center; font-weight:600; margin-top:4px; }
+  .room { display:flex; justify-content:center; gap:18px; margin-top:12px; }
+  .room b { font-size:28px; font-variant-numeric:tabular-nums; } .room div { text-align:center; }
+
+  .dev { padding:10px 0; border-bottom:1px solid var(--line); }
+  .dev:last-child { border:0; }
+  .devhead { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .btns { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  input, button { font:inherit; }
+  input[type=text], input[type=password] { width:100%; padding:9px 10px; border-radius:8px;
+    border:1px solid var(--line); background:var(--well); color:var(--fg); }
+  button { padding:7px 12px; border-radius:8px; border:0; background:var(--accent);
+    color:#fff; cursor:pointer; min-height:36px; }
+  button.alt { background:#2a2e37; } button:disabled { opacity:.5; cursor:default; }
+  button:focus-visible, input:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .row { display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap; }
+  .row input { flex:1; min-width:160px; }
+  pre { background:var(--well); padding:12px; border-radius:8px; overflow:auto; margin:8px 0 0;
+    white-space:pre-wrap; word-break:break-word; max-height:45vh; font:14px/1.5 ui-monospace,monospace; }
+  .qa p { margin:4px 0; } .qa .q { color:var(--mut); }
+  .log { list-style:none; margin:0; padding:0; max-height:260px; overflow:auto;
+    font:13px/1.6 ui-monospace,monospace; }
+  .log li { display:flex; gap:10px; border-bottom:1px solid var(--line); padding:2px 0; }
+  .log .t { color:var(--mut); flex:none; } .log .d { color:var(--accent); flex:none; }
+  .log li > span:last-child { min-width:0; overflow-wrap:anywhere; }
+  .states span { display:inline-block; padding:1px 7px; margin:2px; border-radius:6px;
+    background:#23303f; font-size:12px; }
+  #keybar { display:none; } #keybar.show { display:flex; }
+</style></head><body>
+
+<header>
+  <span id="conn" class="dot stale" title="station connection"></span>
+  <h1>eco station</h1><span class="grow"></span><span id="clock" class="mut"></span>
+</header>
+<div class="mut">Laptop brain · live status, device controls, streaming answers</div>
+
+<div id="keybar" class="row card" role="group" aria-label="API key">
+  <span>API key needed on this device:</span>
+  <input id="keyin" type="password" autocomplete="off" aria-label="API key">
+  <button onclick="saveKey()">Save</button>
+</div>
+
+<div class="grid" style="margin-top:12px">
+  <div>
+    <div class="card">
+      <svg id="face" class="face mood-idle" viewBox="0 0 240 180" role="img" aria-label="station mood">
+        <rect x="16" y="10" width="208" height="150" rx="30" fill="#161e2e"
+              stroke="currentColor" stroke-width="5"/>
+        <g class="eyes-open" fill="currentColor">
+          <circle cx="80" cy="70" r="22"/><circle cx="160" cy="70" r="22"/>
+        </g>
+        <g class="eyes-open" fill="#fff"><circle cx="88" cy="62" r="5"/><circle cx="168" cy="62" r="5"/></g>
+        <g class="eyes-closed" stroke="currentColor" stroke-width="6" stroke-linecap="round">
+          <line x1="58" y1="70" x2="102" y2="70"/><line x1="138" y1="70" x2="182" y2="70"/>
+        </g>
+        <path class="m m-smile" d="M80 112 Q120 145 160 112" fill="none" stroke="currentColor"
+              stroke-width="6" stroke-linecap="round"/>
+        <ellipse class="m m-open" cx="120" cy="122" rx="24" ry="12" fill="currentColor"/>
+        <ellipse class="m m-o" cx="120" cy="120" rx="16" ry="14" fill="none"
+                 stroke="currentColor" stroke-width="6"/>
+        <line class="m m-flat" x1="84" y1="120" x2="156" y2="120" stroke="currentColor"
+              stroke-width="6" stroke-linecap="round"/>
+      </svg>
+      <div id="caption" class="caption" aria-live="polite">idle</div>
+      <div class="room">
+        <div><b id="temp">--</b><div class="mut">°C</div></div>
+        <div><b id="hum">--</b><div class="mut">% RH</div></div>
+      </div>
+      <div id="roomage" class="mut" style="text-align:center"></div>
+    </div>
+
+    <div class="card qa" style="margin-top:12px">
+      <h2>Last question</h2>
+      <div id="last" class="mut">nothing asked yet</div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>Ask</h2>
+      <form class="row" onsubmit="ask(); return false;">
+        <input id="ask" type="text" aria-label="question" placeholder='Ask, or try "what is the temperature"'>
+        <button id="askbtn" type="submit">Ask</button>
+      </form>
+      <div class="row">
+        <button class="alt" type="button" onclick="quick('what is the temperature in my room')">Room temp</button>
+        <button class="alt" type="button" onclick="quick('list devices')">List devices</button>
+        <button class="alt" type="button" onclick="quick('ping all devices')">Ping all</button>
+      </div>
+      <pre id="out" aria-live="polite">—</pre>
+      <div id="meta" class="mut"></div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <h2>Devices <span id="devcount"></span></h2>
+      <div class="row" style="margin-top:0">
+        <input id="showtext" type="text" maxlength="110" aria-label="text to show on a screen"
+               placeholder="Text for Show on TFT / OLED">
+      </div>
+      <div id="devices" class="mut">loading…</div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <h2>Live events</h2>
+      <ul id="log" class="log"><li class="mut">waiting for device events…</li></ul>
+    </div>
+  </div>
+</div>
+
+<script>
+// Embedded only when the page is opened on the laptop itself; elsewhere it's asked once.
+let KEY = '__API_KEY__';
+try { if (!KEY) KEY = localStorage.getItem('ecoKey') || ''; } catch (e) {}
+
+// Button labels for the actions the server allows from the panel (it re-checks).
+const ACTIONS = { ping:'Ping', blink_led:'Blink', beep:'Beep', read_dht:'Read temp',
+                  tft_show:'Show on TFT', oled_show:'Show on OLED' };
+const CAPTIONS = { idle:'idle', speaking:'talking', alert:'ALERT — hot', offline:'devices offline' };
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function age(ms) {
+  const s = Math.max(0, ms / 1000);
+  return s < 2 ? 'now' : s < 60 ? `${s|0}s ago` : s < 3600 ? `${(s/60)|0}m ago` : `${(s/3600)|0}h ago`;
+}
+const hhmmss = ms => new Date(ms).toLocaleTimeString([], {hour12:false});
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { 'X-API-Key': KEY, ...(opts.headers || {}) } });
+  if (r.status === 401) { $('keybar').classList.add('show'); throw new Error('API key required'); }
+  return r;
+}
+function saveKey() {
+  KEY = $('keyin').value.trim();
+  try { localStorage.setItem('ecoKey', KEY); } catch (e) {}
+  $('keybar').classList.remove('show'); poll();
+}
+
+let lastDevicesSig = '';
+function renderDevices(devs, now) {
+  $('devcount').textContent = `(${devs.filter(d => d.online && !d.stale).length}/${devs.length} live)`;
+  // Rebuild only when something changed, so buttons don't flicker under the cursor.
+  const sig = JSON.stringify(devs.map(d => [d.device_id, d.online && !d.stale, d.fw_version,
+                                            (d.capabilities||[]).map(c => c.name)]));
+  if (sig !== lastDevicesSig) {
+    lastDevicesSig = sig;
+    $('devices').innerHTML = devs.length ? devs.map(d => {
+      const live = d.online && !d.stale;
+      const btns = (d.capabilities||[]).map(c => c.name).filter(n => ACTIONS[n])
+        .map(n => `<button class="alt" type="button" ${live ? '' : 'disabled'}
+            data-dev="${esc(d.device_id)}" data-act="${esc(n)}">${ACTIONS[n]}</button>`).join('');
+      return `<div class="dev"><div class="devhead">
+          <span class="dot ${live ? 'live' : 'stale'}"></span><b>${esc(d.device_id)}</b>
+          <span class="mut">${esc(d.device_type)} · fw ${esc(d.fw_version)}</span>
+          <span class="grow"></span><span class="mut" data-age="${esc(d.device_id)}"></span></div>
+        <div class="btns">${btns}</div>
+        <div class="mut" data-res="${esc(d.device_id)}"></div></div>`;
+    }).join('') : 'none registered';
+  }
+  for (const d of devs) {
+    const el = document.querySelector(`[data-age="${CSS.escape(d.device_id)}"]`);
+    if (el) el.textContent = d.online && !d.stale ? `seen ${age(now - (d.last_seen||0))}` : 'offline';
+  }
+}
+
+$('devices').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act]'); if (!b) return;
+  const dev = b.dataset.dev, act = b.dataset.act;
+  const res = document.querySelector(`[data-res="${CSS.escape(dev)}"]`);
+  b.disabled = true; res.textContent = `${ACTIONS[act]}…`;
+  try {
+    const r = await api(`/devices/${encodeURIComponent(dev)}/action`, { method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action: act, text: $('showtext').value }) });
+    const j = await r.json();
+    res.innerHTML = r.ok
+      ? `${esc(ACTIONS[act])}: <span class="states">${j.states.map(s => `<span>${esc(s)}</span>`).join('')
+          || '<span>no reply</span>'}</span>`
+      : esc(j.detail || r.statusText);
+  } catch (err) { res.textContent = String(err.message || err); }
+  b.disabled = false; poll();
+});
+
+function render(s) {
+  const face = $('face');
+  face.setAttribute('class', `face mood-${s.mood}`);
+  $('caption').textContent = CAPTIONS[s.mood] || s.mood;
+  const sen = s.sensors || {};
+  $('temp').textContent = sen.temperature_c != null ? Number(sen.temperature_c).toFixed(1) : '--';
+  $('hum').textContent = sen.humidity != null ? Math.round(sen.humidity) : '--';
+  $('roomage').textContent = sen.ts ? `read ${age(s.ts - sen.ts)}` : 'no reading yet — try Read temp';
+  renderDevices(s.devices || [], s.ts);
+  $('last').innerHTML = s.last
+    ? `<p class="q">${s.last.voice ? '🎤 ' : ''}${esc(s.last.text)} <span class="mut">· ${age(s.ts - s.last.ts)}</span></p>
+       <p>${esc(s.last.answer)}</p><p class="mut">${esc(s.last.model)}</p>`
+    : 'nothing asked yet';
+  const log = s.log || [];
+  $('log').innerHTML = log.length ? log.map(e =>
+    `<li><span class="t">${hhmmss(e.ts)}</span><span class="d">${esc(e.device)}</span><span>${esc(e.text)}</span></li>`
+  ).join('') : '<li class="mut">waiting for device events…</li>';
+}
+
+let polling = false;
+async function poll() {
+  if (polling) return; polling = true;
+  try {
+    const r = await api('/status');
+    if (!r.ok) throw new Error(r.statusText);
+    render(await r.json());
+    $('conn').className = 'dot live';
+  } catch (e) { $('conn').className = 'dot stale'; }
+  polling = false;
+}
+
+function quick(t) { $('ask').value = t; ask(); }
+async function ask() {
+  const text = $('ask').value.trim(); if (!text) return;
+  const out = $('out'), meta = $('meta'), btn = $('askbtn');
+  out.textContent = ''; meta.textContent = 'thinking…'; btn.disabled = true;
+  try {
+    const r = await api('/ask/stream', { method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text }) });
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read(); if (done) break;
+      buf += dec.decode(value, { stream:true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const line = buf.slice(0, i); buf = buf.slice(i + 2);
+        if (!line.startsWith('data: ')) continue;
+        const ev = JSON.parse(line.slice(6));
+        if (ev.t === 'chunk') { out.textContent += ev.text; meta.textContent = 'streaming…'; }
+        else if (ev.t === 'error') { out.textContent = 'error: ' + ev.detail; meta.textContent = ''; }
+        else if (ev.t === 'done') {
+          if (ev.answer != null) {
+            out.textContent = ev.answer;
+            meta.textContent = `${ev.model} · ${ev.metrics.tokens_per_s} tok/s · ${Math.round(ev.metrics.total_ms)} ms`;
+          } else if (ev.results) {
+            out.innerHTML = ev.results.map(x => `<b>${esc(x.device_id)}</b><div class="states">` +
+              x.states.map(s => `<span>${esc(s)}</span>`).join('') + '</div>').join('');
+            meta.textContent = ev.action;
+          } else {
+            const { t, ...rest } = ev; out.textContent = JSON.stringify(rest, null, 2); meta.textContent = ev.action || '';
+          }
+        }
+      }
+    }
+  } catch (e) { out.textContent = 'error: ' + (e.message || e); meta.textContent = ''; }
+  btn.disabled = false; poll();
+}
+
+setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString([], {hour12:false}); }, 1000);
+poll(); setInterval(poll, 2000);
+</script></body></html>
