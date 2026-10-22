@@ -141,7 +141,8 @@ def _do_action(action: str, params: dict) -> bool:
 def _capture_image() -> tuple[bool, dict | None]:
     """One 640x480 JPEG from the USB webcam, base64 in the result event
     (~60-100 KB on MQTT, fine for Mosquitto). -S skips the first frames so
-    auto-exposure settles; without it the shot is often dark."""
+    auto-exposure settles: on the Jieli webcam 10 frames still gave black or
+    dark shots (mean brightness 0-54/255), 30 settled (189/255), 60 no better."""
     dev = camera_device()
     if not dev:
         print("  !! capture_image: no camera")
@@ -149,7 +150,7 @@ def _capture_image() -> tuple[bool, dict | None]:
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
         path = f.name
     try:
-        out = subprocess.run(["fswebcam", "-q", "-d", dev, "-r", "640x480", "-S", "10",
+        out = subprocess.run(["fswebcam", "-q", "-d", dev, "-r", "640x480", "-S", "30",
                               "--no-banner", "--jpeg", "85", path],
                              capture_output=True, text=True, timeout=10)
         if out.returncode != 0 or os.path.getsize(path) == 0:

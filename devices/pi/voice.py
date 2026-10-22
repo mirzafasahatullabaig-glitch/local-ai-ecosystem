@@ -67,21 +67,23 @@ def upload(path: str) -> str:
 LOOK_PROMPT = "What do you see? Answer in one short sentence."
 
 
-def look_once() -> str:
-    """Pad 3: ask the station to look through the Pi's USB webcam. The station
-    takes the photo via the agent's capture_image (the same camera path the
-    panel's "Pi camera" button uses) and mirrors the answer to the TFT.
+def look_image(path: str) -> str:
+    """Pad 3: send the snapshot the TFT took when the pad was released to the
+    station's vision model; the station mirrors the answer to the TFT.
     Returns a short status for the TFT if something went wrong, else ""."""
+    import base64
     import json
     import urllib.error
+    with open(path, "rb") as f:
+        image = base64.b64encode(f.read()).decode()
     req = urllib.request.Request(
         f"{STATION}/ask", method="POST",
-        data=json.dumps({"text": LOOK_PROMPT, "camera": True}).encode(),
+        data=json.dumps({"text": LOOK_PROMPT, "image": image}).encode(),
         headers={"Content-Type": "application/json"})
     if API_KEY:
         req.add_header("X-API-Key", API_KEY)
     try:
-        # long timeout: photo (~1s) + vision model load on first use (~12s)
+        # long timeout: the vision model loads on first use (~12s)
         with urllib.request.urlopen(req, timeout=120) as r:
             print(f"saw: {json.loads(r.read()).get('answer')!r}  (answer is on the TFT)")
             return ""
@@ -91,7 +93,7 @@ def look_once() -> str:
         except ValueError:
             detail = e.reason
         print(f"  !! look failed: {e.code} {detail}")
-        return f"camera: {detail}"
+        return f"vision: {detail}"
     except Exception as e:  # noqa: BLE001 - one failed look must not kill the loop
         print(f"  !! look failed: {e}")
         return "vision failed - is the station up?"

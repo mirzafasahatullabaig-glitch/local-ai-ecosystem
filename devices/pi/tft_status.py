@@ -15,10 +15,16 @@ Run (needs GPIO -> sudo, with the venv python):
 from __future__ import annotations
 
 import functools
+import glob
 import json
 import os
 import textwrap
 import time
+
+try:   # only for the pad-3 live camera preview; the status screen works without it
+    import cv2
+except ImportError:
+    cv2 = None
 
 import spidev
 import RPi.GPIO as GPIO
@@ -61,13 +67,20 @@ def init_display() -> None:
     command(0x29); time.sleep(0.1)    # display on
 
 
-def blit(img: Image.Image) -> None:
-    """Push a full 320x480 RGB image to the panel (18-bit, component>>2)."""
-    command(0x2A); data([0, 0, (WIDTH - 1) >> 8, (WIDTH - 1) & 0xFF])
-    command(0x2B); data([0, 0, (HEIGHT - 1) >> 8, (HEIGHT - 1) & 0xFF])
+def blit_region(img: Image.Image, x0: int = 0, y0: int = 0) -> None:
+    """Push an RGB image to the panel at (x0, y0) (18-bit, component>>2).
+    A part-screen push is what makes the live camera preview usable."""
+    w, h = img.size
+    command(0x2A); data([x0 >> 8, x0 & 0xFF, (x0 + w - 1) >> 8, (x0 + w - 1) & 0xFF])
+    command(0x2B); data([y0 >> 8, y0 & 0xFF, (y0 + h - 1) >> 8, (y0 + h - 1) & 0xFF])
     command(0x2C)
     # Same bytes as the old per-pixel loop (R,G,B each >>2), built in C by Pillow.
     data(list(img.convert("RGB").point(lambda v: v >> 2).tobytes()))
+
+
+def blit(img: Image.Image) -> None:
+    """Push a full 320x480 frame."""
+    blit_region(img)
 
 
 # --- rendering ---
@@ -258,6 +271,67 @@ def render(devices: dict, reading: dict) -> Image.Image:
     return img
 
 
+# --- pad 3: live camera preview, snapshot on release ---
+# The touch service (also root) creates PREVIEW_FLAG while pad 3 is held and
+# removes it on release; we stream the webcam meanwhile, then save the last
+# frame to SNAP_FILE for it to send to the station.
+PREVIEW_FLAG = "/tmp/eco_cam_preview"
+SNAP_FILE = "/tmp/eco_cam_snap.jpg"
+PREVIEW_Y = 120   # 320x240 video centred in the 480-tall panel
+
+
+def camera_path() -> str | None:
+    """Same rule as pi_agent: /dev/v4l/by-id lists only real USB cameras."""
+    found = sorted(glob.glob("/dev/v4l/by-id/*-video-index0"))
+    return os.environ.get("ECO_CAMERA_DEV") or (found[0] if found else None)
+
+
+def preview_frame_screen(title: str, hint: str) -> Image.Image:
+    img = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
+    d = ImageDraw.Draw(img)
+    for y, text, font in ((40, title, FONT_TITLE), (HEIGHT - 90, hint, FONT)):
+        tw = d.textbbox((0, 0), text, font=font)[2]
+        d.text(((WIDTH - tw) // 2, y), text, font=font, fill=(255, 255, 255))
+    return img
+
+
+def run_preview() -> None:
+    """Stream the webcam while PREVIEW_FLAG exists, then write the freshest
+    frame to SNAP_FILE and free the camera (the agent's capture needs it)."""
+    path = camera_path()
+    if cv2 is None or not path:
+        blit(preview_frame_screen("no camera", "plug in a USB webcam"))
+        while os.path.exists(PREVIEW_FLAG):
+            time.sleep(0.05)
+        return
+    blit(preview_frame_screen("camera", "release to snap"))
+    cap = cv2.VideoCapture(path, cv2.CAP_V4L2)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    frame = None
+    try:
+        while os.path.exists(PREVIEW_FLAG):
+            ok, f = cap.read()
+            if not ok:
+                time.sleep(0.05)
+                continue
+            small = cv2.cvtColor(cv2.resize(f, (WIDTH, 240)), cv2.COLOR_BGR2RGB)
+            blit_region(Image.fromarray(small), 0, PREVIEW_Y)
+        # The driver queues a few frames; drop them so the snap is the moment
+        # the finger lifted, not ~4 frames before.
+        for _ in range(4):
+            cap.grab()
+        ok, f = cap.read()
+        frame = f if ok else None
+    finally:
+        cap.release()
+    if frame is not None:
+        tmp = SNAP_FILE + ".tmp.jpg"
+        cv2.imwrite(tmp, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        os.replace(tmp, SNAP_FILE)   # atomic: the touch service never reads half a file
+    blit(preview_frame_screen("snap!", "looking at it..."))
+
+
 # --- broker ---
 STALE_MS = 15_000
 
@@ -316,13 +390,20 @@ def main() -> None:
 
     try:
         while True:
+            if os.path.exists(PREVIEW_FLAG):
+                run_preview()
             now = time.time()
             for name in list(devices):
                 age = now - last_seen.get(name, 0)
                 devices[name]["live"] = age * 1000 < STALE_MS
                 devices[name]["age"] = age   # seconds since last message, for the UI
             blit(render(devices, reading))
-            time.sleep(2)   # full redraw ~ every 2s (SPI blit is the slow part)
+            # full redraw ~ every 2s (SPI blit is the slow part), but react to
+            # a pad-3 press within 0.1s
+            for _ in range(20):
+                if os.path.exists(PREVIEW_FLAG):
+                    break
+                time.sleep(0.1)
     except KeyboardInterrupt:
         pass
     finally:

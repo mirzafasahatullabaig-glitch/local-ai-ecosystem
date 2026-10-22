@@ -37,7 +37,11 @@ TOUCH_PINS = {
     5:  [(ESP, "beep", {"ms": 300}), (ESP, "blink_led", {"ms": 1000})],
     6:  [(ESP, "read_dht", {})],
 }
-LOOK_PIN = 13   # pad 3 -> voice.look_once() (Pi camera -> station vision -> TFT)
+LOOK_PIN = 13   # pad 3: hold = live camera on the TFT, release = snap -> vision -> TFT
+# Shared with tft_status.py (both services run as root): the flag exists while
+# pad 3 is held; on release the TFT writes the last frame to SNAP_FILE.
+PREVIEW_FLAG = "/tmp/eco_cam_preview"
+SNAP_FILE = "/tmp/eco_cam_snap.jpg"
 VOICE_PIN = 16  # pad 4 -> voice.listen_once() (record + upload to the station)
 
 
@@ -67,6 +71,10 @@ def main() -> None:
     client.loop_start()
     print(f"touch pads active via {BROKER}:{PORT}")
 
+    # A flag left by a crash mid-hold would keep the TFT in camera preview.
+    if os.path.exists(PREVIEW_FLAG):
+        os.remove(PREVIEW_FLAG)
+
     GPIO.setmode(GPIO.BCM)
     pins = list(TOUCH_PINS) + [LOOK_PIN, VOICE_PIN]
     for pin in pins:
@@ -90,14 +98,30 @@ def main() -> None:
                         client.publish(f"eco/v1/devices/{target}/cmd", cmd, qos=1)
                         print(f"pad GPIO{pin} -> {target}/{action}")
                 last[pin] = now
-            # Pad 3: look. Blocks while the station photographs + describes
-            # (~2s warm, ~15s on the first vision call); fine for a tap.
+            # Pad 3: press starts the TFT's live camera, release snaps. Sending
+            # blocks while the station describes it (~2s warm, ~15s the first
+            # time the vision model loads); fine for a tap.
             look_now = GPIO.input(LOOK_PIN) == GPIO.HIGH
             if look_now and not last[LOOK_PIN]:
-                print(f"pad GPIO{LOOK_PIN} -> look")
-                tft("looking...")
+                print(f"pad GPIO{LOOK_PIN} -> camera preview")
+                open(PREVIEW_FLAG, "w").close()
+            elif last[LOOK_PIN] and not look_now:
+                released = time.time()
+                if os.path.exists(PREVIEW_FLAG):
+                    os.remove(PREVIEW_FLAG)
+                print(f"pad GPIO{LOOK_PIN} released -> snap")
+                # wait for the TFT to save the frame (it drains the camera first)
+                for _ in range(30):
+                    if os.path.exists(SNAP_FILE) and os.path.getmtime(SNAP_FILE) >= released:
+                        break
+                    time.sleep(0.1)
+                else:
+                    tft("no snapshot - is a USB webcam plugged in?")
+                    last[LOOK_PIN] = look_now
+                    continue
+                tft("looking at it...")
                 import voice
-                problem = voice.look_once()
+                problem = voice.look_image(SNAP_FILE)
                 if problem:
                     tft(problem)
             last[LOOK_PIN] = look_now
