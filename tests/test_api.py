@@ -341,7 +341,8 @@ def test_ask_stream_sends_chunks_then_done(tmp_path):
     import json
     events = [json.loads(l[6:]) for l in c.post("/ask/stream", json={"text": "what is MQTT"})
               .text.split("\n\n") if l.startswith("data: ")]
-    assert [e["t"] for e in events] == ["chunk", "chunk", "done"]
+    assert [e["t"] for e in events] == ["route", "chunk", "chunk", "done"]
+    assert events[0]["role"] == "reason" and events[0]["swap"] is False
     assert events[-1]["answer"] == "MQTT is a protocol."
     assert events[-1]["metrics"]["tokens"] == 2
     assert len(c.get("/tasks").json()["tasks"]) == 1    # logged like /ask
@@ -383,3 +384,9 @@ def test_room_fact_only_on_room_questions(tmp_path):
     c, prompts = _capturing_app(tmp_path, sensors=sensors)
     c.post("/ask", json={"text": "what is 2 plus 2"})
     assert prompts[-1] == "what is 2 plus 2"        # fresh reading, but not asked about
+
+
+def test_vision_hint_without_image_uses_fast_reason_model(client):
+    # router says "vision", but /ask carries no image, so don't swap models for it
+    body = client.post("/ask", json={"text": "look at this and tell me what MQTT is"}).json()
+    assert body["role"] == "reason" and body["model"] == "llama3.2:3b"

@@ -37,8 +37,11 @@ CASES = [
     # --- plan role (multi-step) ---
     ("plan a route to the kitchen", "llm", "plan"),
     ("what are the steps to assemble this", "llm", "plan"),
-    ("do this then that in sequence", "llm", "plan"),
     ("give me a multi-step approach", "llm", "plan"),
+    ("explain it step by step", "llm", "plan"),
+    # everyday "then" is chat, not a plan (was a 40s model swap)
+    ("do this then that in sequence", "llm", "reason"),
+    ("I woke up and then had tea", "llm", "reason"),
     # --- reason (default) ---
     ("what is MQTT", "llm", "reason"),
     ("explain how a servo works", "llm", "reason"),

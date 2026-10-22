@@ -272,12 +272,17 @@ async function ask() {
         const line = buf.slice(0, i); buf = buf.slice(i + 2);
         if (!line.startsWith('data: ')) continue;
         const ev = JSON.parse(line.slice(6));
-        if (ev.t === 'chunk') { out.textContent += ev.text; meta.textContent = 'streaming…'; }
+        if (ev.t === 'route') {
+          meta.textContent = `${ev.role} → ${ev.model}` +
+            (ev.swap ? ' · loading model, this can take 10–40 s…' : ' · thinking…');
+        }
+        else if (ev.t === 'chunk') { out.textContent += ev.text; }
         else if (ev.t === 'error') { out.textContent = 'error: ' + ev.detail; meta.textContent = ''; }
         else if (ev.t === 'done') {
           if (ev.answer != null) {
             out.textContent = ev.answer;
-            meta.textContent = `${ev.model} · ${ev.metrics.tokens_per_s} tok/s · ${Math.round(ev.metrics.total_ms)} ms`;
+            meta.textContent = `${ev.role} → ${ev.model}${ev.fell_back ? ' (fallback)' : ''} · ` +
+              `${ev.metrics.tokens_per_s} tok/s · ${Math.round(ev.metrics.total_ms)} ms`;
           } else if (ev.results) {
             out.innerHTML = ev.results.map(x => `<b>${esc(x.device_id)}</b><div class="states">` +
               x.states.map(s => `<span>${esc(s)}</span>`).join('') + '</div>').join('');

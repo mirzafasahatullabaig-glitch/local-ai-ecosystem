@@ -39,7 +39,9 @@ _DETERMINISTIC: list[tuple[re.Pattern, str]] = [
 # not trigger a physical action, so a false positive is cheap).
 _CODE_HINT = re.compile(r"\b(code|function|python|bug|refactor|script|compile)\b")
 _VISION_HINT = re.compile(r"\b(image|photo|picture|see|look|camera|visual)\b")
-_PLAN_HINT = re.compile(r"\b(plan|steps|then|after that|sequence|multi-step)\b")
+# Not "then"/"after that"/"sequence": everyday speech ("I woke up and then…")
+# sent chat to the planner, a 40s model swap instead of a 1s answer.
+_PLAN_HINT = re.compile(r"\b(plan|steps|step[- ]by[- ]step|multi-step)\b")
 
 
 def route(text: str) -> Decision:

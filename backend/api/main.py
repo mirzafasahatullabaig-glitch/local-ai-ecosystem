@@ -52,6 +52,12 @@ TEMP_ALERT_C = 33.0      # same threshold the ESP uses for its HOT alert
 SPEAKING_MS = 90_000     # panel face shows "talking" this long after an answer
 
 
+def _llm_role(role: str) -> str:
+    """The router may say "vision", but no endpoint takes an image yet, so a
+    vision model would only add a ~12s swap to answer plain text. Use reason."""
+    return "reason" if role == "vision" else role
+
+
 def _is_room_question(text: str) -> bool:
     return any(w in text.lower() for w in _ROOM_WORDS)
 
@@ -89,7 +95,7 @@ def _llm_prompt(text: str, sensors: dict | None, voice: bool) -> str:
 
 from backend.device_registry.registry import DeviceRegistry, RegistrationError
 from backend.messaging.bus import DeviceBus, build_command
-from backend.model_gateway.gateway import GatewayError, ModelGateway, ROLE_MODELS
+from backend.model_gateway.gateway import GatewayError, ModelGateway, ROLE_MODELS, WARM
 from backend.orchestrator.router import route
 from backend.storage.sqlite_repo import Repository, SQLiteRepository
 from schemas.messages import Manifest, now_ms
@@ -250,13 +256,14 @@ def create_app(repo: Repository, gateway: ModelGateway,
 
         # LLM tier
         task_id = uuid.uuid4().hex
+        role = _llm_role(decision.role)
         _refresh_room_reading(text)
         try:
-            result = gateway.generate(decision.role, _llm_prompt(text, sensors, voice))
+            result = gateway.generate(role, _llm_prompt(text, sensors, voice))
         except GatewayError as e:
-            log.warning("ask tier=llm role=%s FAILED: %s", decision.role, e)
+            log.warning("ask tier=llm role=%s FAILED: %s", role, e)
             raise HTTPException(status_code=502, detail=str(e))
-        return _finish_llm(text, decision.role, result, task_id, voice)
+        return _finish_llm(text, role, result, task_id, voice)
 
     def _finish_llm(text: str, role: str, result, task_id: str, voice: bool) -> dict:
         """Shared tail of /ask, /listen and /ask/stream: log, record the task,
@@ -348,16 +355,21 @@ def create_app(repo: Repository, gateway: ModelGateway,
                     yield sse({"t": "error", "detail": e.detail})
                 return
             task_id = uuid.uuid4().hex
+            role = _llm_role(decision.role)
+            # Tell the panel which model is about to run: a specialist swap
+            # takes 10-40s, which otherwise looks like a hang.
+            yield sse({"t": "route", "role": role, "model": ROLE_MODELS[role][0],
+                       "swap": ROLE_MODELS[role][0] != WARM})
             _refresh_room_reading(req.text)
-            gen = gateway.stream(decision.role, _llm_prompt(req.text, sensors, False))
+            gen = gateway.stream(role, _llm_prompt(req.text, sensors, False))
             try:
                 while True:
                     yield sse({"t": "chunk", "text": next(gen)})
             except StopIteration as stop:
-                yield sse({"t": "done", **_finish_llm(req.text, decision.role,
+                yield sse({"t": "done", **_finish_llm(req.text, role,
                                                       stop.value, task_id, False)})
             except GatewayError as e:
-                log.warning("ask/stream role=%s FAILED: %s", decision.role, e)
+                log.warning("ask/stream role=%s FAILED: %s", role, e)
                 yield sse({"t": "error", "detail": str(e)})
 
         # Sync generator: Starlette iterates it in a worker thread, so the
