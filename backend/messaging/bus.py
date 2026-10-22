@@ -203,7 +203,10 @@ class DeviceListener:
             self._client.username_pw_set(self._user, self._password)
         self._client.on_connect = on_connect
         self._client.on_message = on_message
-        self._client.connect(self._broker, self._port, keepalive=30)
+        # Async + retry: a blocking connect() raised when the Pi wasn't up yet
+        # (laptop booted first), which killed the whole station at logon.
+        self._client.reconnect_delay_set(min_delay=1, max_delay=30)
+        self._client.connect_async(self._broker, self._port, keepalive=30)
         self._client.loop_start()
 
     def stop(self) -> None:

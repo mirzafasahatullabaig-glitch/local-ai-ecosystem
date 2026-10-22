@@ -81,6 +81,27 @@ scripts/                 start-station.bat, free_gpu.ps1, verify_models.ps1, ben
 tests/                   all mocked: no real Ollama, broker or hardware in pytest
 ```
 
+## Start and stop
+
+Everything starts by itself: the Pi's services start at boot, the ESP when it
+gets power, and the station at Windows logon. Order doesn't matter — the
+station keeps retrying the broker until the Pi is up, and devices reconnect
+on their own.
+
+| | Start | Stop |
+|---|---|---|
+| **Station (laptop)** | `scripts\start-station.bat` (also at logon) | `scripts\stop-station.bat` |
+| **Pi services** | `sudo systemctl start eco-agent eco-tft eco-touch` | `sudo systemctl stop eco-touch eco-tft eco-agent` |
+| **Pi broker** | `sudo systemctl start mosquitto` | `sudo systemctl stop mosquitto` (every device goes offline) |
+| **Pi, whole board** | power on | `sudo poweroff`, then unplug |
+| **ESP32** | plug in USB/power | unplug |
+| **Ollama** | starts with Windows (tray icon) | quit from the tray, or `scripts\free_gpu.ps1` to just free the GPU |
+
+Status: `sudo systemctl status eco-agent eco-tft eco-touch mosquitto` on the
+Pi, or the developer page's **Logs & health** tab. Restart one Pi service
+after copying new code: `sudo systemctl restart eco-tft` (etc.). Stopping
+`eco-tft` leaves the last frame frozen on the screen.
+
 ## Running
 
 ```powershell
