@@ -6,6 +6,8 @@ RST=25, 18-bit colour, 320x480). Subscribes to the broker and redraws when a
 device's manifest/state/event changes.
 
 Deps (already on the Pi): spidev, RPi.GPIO, Pillow, paho-mqtt.
+Color emoji on the panel needs: sudo apt install fonts-noto-color-emoji libraqm0
+(without them, emoji are skipped and only the text labels show — no crash).
 Run (needs GPIO -> sudo, with the venv python):
   sudo ECO_MQTT_USER=eco ECO_MQTT_PASS=... ~/tft-test-env/bin/python tft_status.py
   (or whichever venv has paho; falls back to no-broker demo if paho missing)
@@ -78,23 +80,53 @@ def load_font(size: int):
         return ImageFont.load_default()
 
 
+def load_emoji(size: int):
+    # Color emoji needs its own font + libraqm; falls back to None if the
+    # package isn't installed (apt install fonts-noto-color-emoji libraqm0).
+    for path in ("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+                 "/usr/share/fonts/truetype/noto-color-emoji/NotoColorEmoji.ttf"):
+        try:
+            return ImageFont.truetype(path, size, layout_engine=ImageFont.Layout.RAQM)
+        except Exception:
+            continue
+    return None
+
+
 FONT_TITLE = load_font(26)
 FONT = load_font(20)
 FONT_SM = load_font(16)
+# NotoColorEmoji ships a single 109px bitmap strike; it only loads at that size
+# (any other raises "invalid pixel size"). emoji_text downscales from here.
+EMOJI = load_emoji(109)
+
+
+def emoji_text(img, xy, emoji, text, font, fill):
+    """Draw `emoji text` onto `img` at xy. NotoColorEmoji is a fixed-strike
+    bitmap font (only 109px), so the glyph is drawn at 109 then downscaled and
+    alpha-pasted. Falls back to text-only if the emoji font didn't load."""
+    x, y = xy
+    size = font.size if hasattr(font, "size") else 20
+    if EMOJI is not None and emoji:
+        tile = Image.new("RGBA", (109, 109), (0, 0, 0, 0))
+        ImageDraw.Draw(tile).text((0, 0), emoji, font=EMOJI, embedded_color=True)
+        g = tile.resize((size, size), Image.LANCZOS)
+        img.paste(g, (x, y), g)   # alpha mask keeps the panel background
+        x += int(size * 1.2)
+    if text:
+        ImageDraw.Draw(img).text((x, y), text, font=font, fill=fill)
+    return x
 
 
 def render(devices: dict, reading: dict) -> Image.Image:
     img = Image.new("RGB", (WIDTH, HEIGHT), (10, 12, 20))
     d = ImageDraw.Draw(img)
     d.rectangle([0, 0, WIDTH, 44], fill=(30, 50, 90))
-    d.text((10, 8), "eco · devices", font=FONT_TITLE, fill=(255, 255, 255))
+    emoji_text(img, (10, 8), "🤖", "eco · devices", FONT_TITLE, (255, 255, 255))
 
     y = 60
     for name, info in sorted(devices.items()):
         live = info.get("live")
-        dot = (60, 210, 140) if live else (220, 70, 70)
-        d.ellipse([12, y + 6, 26, y + 20], fill=dot)
-        d.text((38, y), name, font=FONT, fill=(235, 235, 235))
+        emoji_text(img, (12, y), "🟢" if live else "🔴", name, FONT, (235, 235, 235))
         d.text((38, y + 24), "live" if live else "offline",
                font=FONT_SM, fill=(150, 160, 175))
         y += 58
@@ -114,7 +146,7 @@ def render(devices: dict, reading: dict) -> Image.Image:
             lines[-1] = lines[-1][:23] + "..."
         band_top = HEIGHT - 70 - (28 + len(lines) * 18)
         d.rectangle([0, band_top, WIDTH, HEIGHT - 70], fill=(70, 40, 20))
-        d.text((12, band_top + 6), "MSG:", font=FONT_SM, fill=(255, 200, 120))
+        emoji_text(img, (12, band_top + 6), "💬", "MSG:", FONT_SM, (255, 200, 120))
         for i, line in enumerate(lines):
             d.text((12, band_top + 26 + i * 18), line, font=FONT_SM, fill=(255, 230, 190))
 
@@ -123,8 +155,8 @@ def render(devices: dict, reading: dict) -> Image.Image:
         t = reading.get("temperature_c")
         h = reading.get("humidity")
         if t is not None:
-            d.text((12, HEIGHT - 60), f"{t:.1f} C   {h:.0f}% RH",
-                   font=FONT_TITLE, fill=(120, 220, 255))
+            emoji_text(img, (12, HEIGHT - 60), "🌡", f"{t:.1f}C  {h:.0f}% RH",
+                       FONT_TITLE, (120, 220, 255))
     d.text((12, HEIGHT - 24), time.strftime("%H:%M:%S"), font=FONT_SM,
            fill=(120, 130, 145))
     return img

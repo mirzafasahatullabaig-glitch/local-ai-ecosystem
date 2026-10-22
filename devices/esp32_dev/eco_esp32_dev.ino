@@ -99,16 +99,18 @@ void oledStatus() {
   if (!oledOk) return;
   oled.clearDisplay();
   oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  // ASCII "emoji": OLED font is ASCII-only, so symbols stand in for icons.
   oled.setCursor(0, 0);
-  oled.println(mqtt.connected() ? "eco: ONLINE" : "eco: connecting");
+  oled.println(mqtt.connected() ? "[*] eco ONLINE" : "[.] connecting");
   oled.setCursor(0, 12);
-  oled.println(WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "no wifi");
+  oled.println(WiFi.status() == WL_CONNECTED
+               ? "(w) " + WiFi.localIP().toString() : "(x) no wifi");
   oled.setCursor(0, 30);
   if (!isnan(lastTemp)) {
     oled.setTextSize(2);
-    oled.println(String(lastTemp, 1) + "C " + String(lastHum, 0) + "%");
+    oled.println("T" + String(lastTemp, 1) + " H" + String(lastHum, 0) + "%");
   } else {
-    oled.println("DHT: --");
+    oled.println("DHT --");
   }
   oled.display();
 }
@@ -260,7 +262,7 @@ void connectMqtt() {
       oledStatus();
     } else {
       Serial.printf("  failed rc=%d, retry in 2s\n", mqtt.state());
-      oledShow("MQTT fail", "rc=" + String(mqtt.state()));
+      oledShow("[x] MQTT fail", "rc=" + String(mqtt.state()));
       delay(2000);
     }
   }
@@ -275,7 +277,7 @@ void setup() {
   Wire.begin(OLED_SDA, OLED_SCL);
   oledOk = oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);  // false if panel not found
   if (!oledOk) Serial.println("OLED not found (continuing without it)");
-  oledShow("eco booting", "");
+  oledShow("[~] eco booting", "");
 
   CMD_TOPIC = T("cmd"); EVT_TOPIC = T("evt");
   MANIFEST_TOPIC = T("manifest"); STATE_TOPIC = T("state");
@@ -289,8 +291,8 @@ void setup() {
   // port named by DEVICE_ID). Password-guarded so not anyone on the LAN can flash.
   ArduinoOTA.setHostname(DEVICE_ID);
   ArduinoOTA.setPassword(OTA_PASSWORD);
-  ArduinoOTA.onStart([]() { oledShow("OTA update", "incoming..."); });
-  ArduinoOTA.onEnd([]()   { oledShow("OTA done", "rebooting"); });
+  ArduinoOTA.onStart([]() { oledShow("[v] OTA update", "incoming..."); });
+  ArduinoOTA.onEnd([]()   { oledShow("[*] OTA done", "rebooting"); });
   ArduinoOTA.begin();
 
   Serial.println("agent running");
