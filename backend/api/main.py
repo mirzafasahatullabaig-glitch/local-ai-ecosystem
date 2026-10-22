@@ -239,10 +239,15 @@ def create_app(repo: Repository, gateway: ModelGateway,
         # Mirror the answer to any device that can show it (the Pi TFT). Reuses
         # the proven tft_show path; best-effort, never fails the HTTP answer.
         if bus is not None:
+            # The TFT MSG band fits ~4 short lines; send a trimmed answer so it
+            # isn't clipped mid-word. The HTTP `answer` below stays full.
+            tft_text = " ".join(result.text.split())[:110]
+            if len(" ".join(result.text.split())) > 110:
+                tft_text = tft_text.rsplit(" ", 1)[0] + " ..."
             for dev in registry.find_by_capability("tft_show"):
                 try:
                     cmd = build_command(dev["device_id"], "tft_show",
-                                        {"text": result.text}, user="api")
+                                        {"text": tft_text}, user="api")
                     bus.send_command(cmd)
                 except Exception as e:  # noqa: BLE001 - display is best-effort
                     log.warning("tft_show mirror to %s failed: %s", dev["device_id"], e)

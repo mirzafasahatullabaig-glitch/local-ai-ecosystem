@@ -211,16 +211,17 @@ def render(devices: dict, reading: dict) -> Image.Image:
         y += 30
 
     if msg:
+        # Band sits directly under the device list and grows down. The laptop
+        # already trims the answer to ~4 short lines, so it never reaches the
+        # temp band (bottom 70px); clamp to 4 as a guard.
         import textwrap
         lines = textwrap.wrap(msg, width=26)[:4]
-        if len(textwrap.wrap(msg, width=26)) > 4:
-            lines[-1] = lines[-1][:23] + "..."
-        band_top = HEIGHT - 70 - (26 + len(lines) * 18)
-        if band_top > y:   # only if it fits above the reading band
-            d.rectangle([0, band_top, WIDTH, HEIGHT - 70], fill=(70, 40, 20))
-            emoji_text(img, (12, band_top + 4), "💬", "MSG:", FONT_SM, (255, 200, 120))
-            for i, line in enumerate(lines):
-                d.text((12, band_top + 24 + i * 18), line, font=FONT_SM, fill=(255, 230, 190))
+        band_top = y + 4
+        band_bot = min(band_top + 24 + len(lines) * 18, HEIGHT - 72)
+        d.rectangle([0, band_top, WIDTH, band_bot], fill=(70, 40, 20))
+        emoji_text(img, (12, band_top + 4), "💬", "MSG:", FONT_SM, (255, 200, 120))
+        for i, line in enumerate(lines):
+            d.text((12, band_top + 24 + i * 18), line, font=FONT_SM, fill=(255, 230, 190))
 
     if reading:
         d.rectangle([0, HEIGHT - 70, WIDTH, HEIGHT], fill=(20, 30, 45))
