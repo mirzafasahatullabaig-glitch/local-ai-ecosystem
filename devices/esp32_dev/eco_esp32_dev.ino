@@ -149,9 +149,10 @@ bool doAction(const char* action, JsonVariant params, JsonDocument& out) {
   }
 
   if (strcmp(action, "beep") == 0) {
+    // Active buzzer: drive the pin HIGH for the duration (built-in oscillator).
+    // (A passive buzzer would need tone(); this board has an active one.)
     long ms = params["ms"] | 300; if (ms > 3000) ms = 3000;
-    long freq = params["freq"] | 2000;
-    tone(BUZZ_PIN, freq, ms); delay(ms); noTone(BUZZ_PIN);
+    digitalWrite(BUZZ_PIN, HIGH); delay(ms); digitalWrite(BUZZ_PIN, LOW);
     return true;
   }
 
