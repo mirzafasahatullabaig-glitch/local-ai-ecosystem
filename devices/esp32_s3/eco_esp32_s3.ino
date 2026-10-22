@@ -22,7 +22,7 @@ const int   MQTT_PORT     = 1883;
 static const char* DEVICE_ID = "esp32_s3_01"; // must match ^[a-z0-9_]{3,32}$
 static const int   SCHEMA_VERSION = 1;
 static const int   PROTOCOL_VERSION = 1;
-static const int   LED_PIN = 48;               // onboard LED on most S3 dev boards
+static const int   LED_PIN = 48;               // onboard LED (RGB or plain) pin; change if your board differs
 
 String CMD_TOPIC, EVT_TOPIC, MANIFEST_TOPIC, STATE_TOPIC;
 WiFiClient net;
@@ -84,7 +84,12 @@ bool doAction(const char* action, JsonVariant params) {
   if (strcmp(action, "blink_led") == 0) {
     long ms = params["ms"] | 500;
     if (ms > 5000) ms = 5000;            // honor max_duration_ms
-    digitalWrite(LED_PIN, HIGH); delay(ms); digitalWrite(LED_PIN, LOW);
+    // Drive both LED kinds: rgbLedWrite lights an addressable WS2812 (most S3
+    // dev boards, incl. DevKitC-1); digitalWrite lights a plain LED on the same
+    // pin. Whichever this board has, one of them turns on.
+    rgbLedWrite(LED_PIN, 0, 60, 0); digitalWrite(LED_PIN, HIGH);
+    delay(ms);
+    rgbLedWrite(LED_PIN, 0, 0, 0);  digitalWrite(LED_PIN, LOW);
     return true;
   }
   Serial.printf("  !! unknown action %s\n", action);
