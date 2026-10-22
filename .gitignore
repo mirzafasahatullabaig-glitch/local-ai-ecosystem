@@ -5,3 +5,5 @@ __pycache__/
 .env.*
 bench_results/
 api.log
+# flashable firmware with real creds; the .example is the tracked template
+devices/esp32_dev/eco_esp32_dev.ino
