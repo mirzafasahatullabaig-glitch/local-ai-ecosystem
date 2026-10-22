@@ -22,6 +22,46 @@ the cloud.
                                                      └──────────────────┘
 ```
 
+## Status
+
+### What is built
+
+| Area | What works |
+|---|---|
+| **Station (laptop)** | FastAPI on :8000, starts at logon; local LLMs via Ollama with automatic model choice per question (reason / code / plan / vision); Whisper speech-to-text; answers mirrored to the Pi screen |
+| **Room awareness** | Asking about the temperature makes the station read the ESP's DHT11 and answer with the real value |
+| **Voice** | Pi pad 4 push-to-talk, and a mic button in the web panel |
+| **Vision** | Questions about a photo from: panel upload (phone camera), laptop webcam, the Pi's USB webcam, voice ("what do you see"), or Pi pad 3 (hold for live preview, release to snap) |
+| **Web panel** | Bot face, room temperature, device buttons, live event log, streaming answers, photo/webcam/mic |
+| **Developer page** | Every LLM call with its exact prompt and timings, live MQTT traffic, raw command sender, station and Pi logs, laptop/Pi health |
+| **Pi** | Animated bot face on the TFT with device list, answers and temperature; 4 touch pads; mic; USB webcam; self-restarting services |
+| **ESP32** | DHT11, OLED status screen, buzzer, LED. Firmware 0.5 in this repo adds over-the-air updates, an over-33 °C alert to the Pi, NTP time and stale/duplicate command checks — the board runs an older version until it is reflashed |
+| **Safety** | The LLM never sends device commands; fixed whitelists; commands expire and report every step; duplicates run once (Pi) |
+| **Security** | API key on every endpoint except `/health`; key never sent to LAN browsers; page CSP; Ollama loopback-only; broker password auth; no secrets or personal info in git |
+
+### Verified on real hardware (2026-10-23)
+
+| Check | Result |
+|---|---|
+| End to end: text, streaming, TFT mirror, room temperature, pads 1–3, vision ×4 routes, web mic | **13 / 13 pass** |
+| Pi agent crash → offline / back online by itself | 0.9 s / 5.0 s |
+| Station restart → both devices live again | 8 s |
+| Malformed, unknown, stale and duplicate commands | rejected or ignored on the Pi; ESP needs the 0.5 reflash (below) |
+| API from another LAN machine without the key | every endpoint 401 except `/health` |
+| Ollama reachable from the Pi | no (loopback only) |
+| Broker with no / wrong password | refused |
+| Unit tests | 100 pass |
+
+Re-run with `pytest -q` and `scripts\check_recovery.py`; full per-version history and results in [CHANGELOG.md](CHANGELOG.md).
+
+### Open
+
+- **Reflash the ESP over USB** (firmware 0.5: NTP clock, refuses stale and duplicate commands, fixes the over-33 °C alert). Not compiled on the station — no `arduino-cli` there.
+- **No e-stop on any device** — fine today (no motors), required before any actuator (see Safety model).
+- **MQTT is not encrypted** on the LAN.
+- **Untested:** broker restart, Wi-Fi loss, Pi power loss.
+- Vision and code questions take 10–20 s because only one model fits in GPU memory at a time.
+
 ## Layout
 
 ```
@@ -50,7 +90,9 @@ py -3.11 -m venv .venv; .\.venv\Scripts\Activate.ps1; pip install -r requirement
 
 `start-station.bat` also runs at logon (shortcut "eco station" in the Startup
 folder). `.env.mqtt` (gitignored) holds `ECO_MQTT_USER`, `ECO_MQTT_PASS`,
-`ECO_API_KEY`. Ollama user env: `OLLAMA_HOST=127.0.0.1:11434` (loopback only),
+`ECO_API_KEY`, `ECO_BROKER` (the Pi's address — the station won't start
+without it) and `ECO_PI_SSH` (`user@pi`, for the developer page's logs and
+health); see `.env.example`. Ollama user env: `OLLAMA_HOST=127.0.0.1:11434` (loopback only),
 `OLLAMA_MAX_LOADED_MODELS=1`, `OLLAMA_NUM_PARALLEL=1`.
 
 - **Panel** — `http://localhost:8000/`: bot face, room temperature, devices and
@@ -121,7 +163,7 @@ Pi services (systemd, secrets in root-only `/etc/eco/eco.env`): `eco-agent`,
 | Panel / dev page | Key embedded only when opened from the laptop itself; other browsers enter it once (localStorage). Both pages send a CSP with `connect-src 'self'`, so even injected script can't send the key elsewhere. |
 | Ollama | Bound to `127.0.0.1`; unreachable from the LAN (verified from the Pi). |
 | MQTT | Password auth; anonymous and wrong-password clients are refused (verified). **Not encrypted**: someone on the same WiFi could sniff the password. TLS on 8883 is the fix if the LAN isn't trusted. |
-| Secrets | `.env.mqtt` and the filled-in ESP `.ino` are gitignored; only `.ino.example` is tracked. |
+| Secrets and personal info | `.env.mqtt` and the filled-in ESP `.ino` are gitignored; only `.ino.example` is tracked. Addresses, usernames and passwords live only there; tracked files use placeholders (`YOUR_PI_IP`). Commits use the GitHub no-reply email. |
 | Remote access | None is set up. Do not port-forward :8000 or :1883; a VPN (e.g. Tailscale) would still need the API key. |
 
 ## Device protocol (v1)
@@ -153,9 +195,8 @@ pytest -q                                   # 100 tests, all mocked
 .venv\Scripts\python scripts\check_recovery.py   # LIVE: kills the Pi agent, restarts the station
 ```
 
-Latest live results (end to end, failure/recovery, security) and the history
-of every change are in [CHANGELOG.md](CHANGELOG.md). Not yet tested: broker
-restart, Wi-Fi loss, Pi power loss.
+Results are summarised under [Status](#status); every version is in
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Benchmarks
 
