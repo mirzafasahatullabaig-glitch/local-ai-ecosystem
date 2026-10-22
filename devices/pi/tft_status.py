@@ -200,6 +200,10 @@ def render(devices: dict, reading: dict) -> Image.Image:
     live_n = sum(1 for i in devices.values() if i.get("live"))
     emoji_text(img, (10, y0 + 5), "🤖",
                f"eco · {live_n}/{len(devices)} live", FONT, (255, 255, 255))
+    # Temp at a glance in the strip (full reading still in the bottom band).
+    t = reading.get("temperature_c") if reading else None
+    if t is not None:
+        d.text((WIDTH - 78, y0 + 8), f"{t:.1f}°C", font=FONT, fill=(170, 225, 255))
 
     y = y0 + 44
     for name, info in sorted(devices.items()):
