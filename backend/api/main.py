@@ -13,7 +13,7 @@ import time
 import uuid
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -104,8 +104,9 @@ async function send() {
   const text = document.getElementById('ask').value;
   const out = document.getElementById('out'); out.textContent = 'sending…';
   try {
-    const r = await fetch('/ask', {method:'POST', headers:{'Content-Type':'application/json'},
-                                   body: JSON.stringify({text})});
+    const r = await fetch('/ask', {method:'POST',
+        headers:{'Content-Type':'application/json', 'X-API-Key':'__API_KEY__'},
+        body: JSON.stringify({text})});
     const j = await r.json();
     if (j.answer) { out.textContent = j.answer + '\\n\\n[' + j.model + ', ' +
         j.metrics.tokens_per_s + ' tok/s]'; }
@@ -121,13 +122,20 @@ loadDevices(); setInterval(loadDevices, 3000);
 
 
 def create_app(repo: Repository, gateway: ModelGateway,
-               bus: "DeviceBus | None" = None) -> FastAPI:
+               bus: "DeviceBus | None" = None,
+               api_key: str | None = None) -> FastAPI:
     app = FastAPI(title="local-ai-ecosystem", version="1")
     registry = DeviceRegistry(repo)
 
+    def require_key(x_api_key: str | None = Header(default=None)) -> None:
+        # No key configured -> open (dev default). Configured -> must match.
+        if api_key and x_api_key != api_key:
+            raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
+
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        return _INDEX_HTML
+        # Embed the key so the same-origin page can call /ask. localhost only.
+        return _INDEX_HTML.replace("__API_KEY__", api_key or "")
 
     @app.get("/health")
     def health() -> dict:
@@ -141,7 +149,7 @@ def create_app(repo: Repository, gateway: ModelGateway,
     def devices() -> dict:
         return {"devices": registry.list()}
 
-    @app.post("/devices/register")
+    @app.post("/devices/register", dependencies=[Depends(require_key)])
     def register(manifest: Manifest) -> dict:
         try:
             dev = registry.register(manifest)
@@ -179,7 +187,7 @@ def create_app(repo: Repository, gateway: ModelGateway,
         return {"tier": "deterministic", "action": action,
                 "capability": capability, "results": results}
 
-    @app.post("/ask")
+    @app.post("/ask", dependencies=[Depends(require_key)])
     def ask(req: AskRequest) -> dict:
         decision = route(req.text)
 
@@ -240,12 +248,16 @@ def _build_default_app() -> FastAPI:
     # Broker on the Pi by default; override with ECO_BROKER.
     broker = os.environ.get("ECO_BROKER", "YOUR_PI_IP")
     port = int(os.environ.get("ECO_BROKER_PORT", "1883"))
+    mq_user = os.environ.get("ECO_MQTT_USER")
+    mq_pass = os.environ.get("ECO_MQTT_PASS")
     from backend.messaging.bus import DeviceListener, MqttDeviceBus
-    bus = MqttDeviceBus(broker, port)
-    app = create_app(SQLiteRepository(db), gateway, bus=bus)
+    bus = MqttDeviceBus(broker, port, mq_user, mq_pass)
+    app = create_app(SQLiteRepository(db), gateway, bus=bus,
+                     api_key=os.environ.get("ECO_API_KEY"))
     # Background listener auto-registers devices and keeps them live from their
     # retained manifest + periodic state, so the web UI shows real status.
-    listener = DeviceListener(DeviceRegistry(SQLiteRepository(db)), broker, port)
+    listener = DeviceListener(DeviceRegistry(SQLiteRepository(db)), broker, port,
+                              mq_user, mq_pass)
     listener.start()
     app.state.listener = listener
     return app

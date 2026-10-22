@@ -112,6 +112,9 @@ def on_message(client, userdata, msg):
 
 def main() -> None:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"agent-{DEVICE_ID}")
+    user, pw = os.environ.get("ECO_MQTT_USER"), os.environ.get("ECO_MQTT_PASS")
+    if user:
+        client.username_pw_set(user, pw)
     # Last will: if the agent drops, the broker marks us offline on the state topic.
     client.will_set(STATE_TOPIC, json.dumps({"online": False}), qos=1, retain=True)
     client.on_connect = on_connect

@@ -44,9 +44,12 @@ class MqttDeviceBus:
     """paho-mqtt implementation. One short-lived connection per call keeps the
     API stateless; fine for low command volume."""
 
-    def __init__(self, broker: str, port: int = 1883) -> None:
+    def __init__(self, broker: str, port: int = 1883,
+                 user: str | None = None, password: str | None = None) -> None:
         self._broker = broker
         self._port = port
+        self._user = user
+        self._password = password
 
     def send_command(self, cmd: Command, collect_ms: int = 2500) -> list[Event]:
         import paho.mqtt.client as mqtt  # local import so tests needn't have paho
@@ -72,6 +75,8 @@ class MqttDeviceBus:
 
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
                              client_id=f"eco-api-{cmd.command_id[:8]}")
+        if self._user:
+            client.username_pw_set(self._user, self._password)
         client.on_connect = on_connect
         client.on_message = on_message
         client.connect(self._broker, self._port, keepalive=15)
@@ -88,10 +93,13 @@ class DeviceListener:
     their heartbeat. Lets devices self-register instead of the laptop POSTing.
     """
 
-    def __init__(self, registry, broker: str, port: int = 1883) -> None:
+    def __init__(self, registry, broker: str, port: int = 1883,
+                 user: str | None = None, password: str | None = None) -> None:
         self._registry = registry
         self._broker = broker
         self._port = port
+        self._user = user
+        self._password = password
         self._client = None
 
     def start(self) -> None:
@@ -117,6 +125,8 @@ class DeviceListener:
 
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
                                    client_id="eco-api-listener")
+        if self._user:
+            self._client.username_pw_set(self._user, self._password)
         self._client.on_connect = on_connect
         self._client.on_message = on_message
         self._client.connect(self._broker, self._port, keepalive=30)

@@ -37,6 +37,20 @@ def test_health(client):
     assert r.json()["status"] == "ok"
 
 
+def test_api_key_enforced(tmp_path):
+    repo = SQLiteRepository(str(tmp_path / "t.db"))
+    http = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=OK_BODY)),
+                        base_url="http://127.0.0.1:11434")
+    app = create_app(repo, ModelGateway(http), api_key="secret123")
+    c = TestClient(app)
+    # /ask without key -> 401; with correct key -> 200
+    assert c.post("/ask", json={"text": "what is MQTT"}).status_code == 401
+    assert c.post("/ask", json={"text": "what is MQTT"},
+                  headers={"X-API-Key": "secret123"}).status_code == 200
+    # read-only /health stays open
+    assert c.get("/health").status_code == 200
+
+
 def test_models(client):
     r = client.get("/models")
     assert r.status_code == 200
