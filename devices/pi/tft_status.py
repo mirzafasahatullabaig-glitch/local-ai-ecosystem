@@ -117,7 +117,7 @@ def emoji_text(img, xy, emoji, text, font, fill):
     return x
 
 
-FACE_H = 262   # top region for the bot face (~55% of 480); status fills the rest
+FACE_H = 210   # top region for the bot face; status + MSG + temp fill the rest
 
 # Per-mood accent colour + a short caption shown under the face.
 MOODS = {
@@ -214,14 +214,17 @@ def render(devices: dict, reading: dict) -> Image.Image:
         d.text((WIDTH - 90, y + 1), label, font=FONT_SM, fill=(150, 160, 175))
         y += 30
 
-    if msg:
-        # Band sits directly under the device list and grows down. The laptop
-        # already trims the answer to ~4 short lines, so it never reaches the
-        # temp band (bottom 70px); clamp to 4 as a guard.
+    msg_bottom = HEIGHT - 72   # keep clear of the temp band (bottom 70px)
+    if msg and y + 4 + 24 + 18 <= msg_bottom:   # room for the label + >=1 line
         import textwrap
-        lines = textwrap.wrap(msg, width=26)[:4]
         band_top = y + 4
-        band_bot = min(band_top + 24 + len(lines) * 18, HEIGHT - 72)
+        # Only as many lines as physically fit above the temp band — never draw
+        # into it. The label eats the first 24px, each line 18px.
+        fit = max(0, (msg_bottom - band_top - 24) // 18)
+        lines = textwrap.wrap(msg, width=26)[:fit]
+        if textwrap.wrap(msg, width=26)[fit:]:   # truncated -> mark it
+            lines[-1] = lines[-1][:23] + "..."
+        band_bot = band_top + 24 + len(lines) * 18
         d.rectangle([0, band_top, WIDTH, band_bot], fill=(70, 40, 20))
         emoji_text(img, (12, band_top + 4), "💬", "MSG:", FONT_SM, (255, 200, 120))
         for i, line in enumerate(lines):
