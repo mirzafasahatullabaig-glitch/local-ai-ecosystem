@@ -64,6 +64,39 @@ def upload(path: str) -> str:
         return json.loads(r.read()).get("transcript", "")
 
 
+LOOK_PROMPT = "What do you see? Answer in one short sentence."
+
+
+def look_once() -> str:
+    """Pad 3: ask the station to look through the Pi's USB webcam. The station
+    takes the photo via the agent's capture_image (the same camera path the
+    panel's "Pi camera" button uses) and mirrors the answer to the TFT.
+    Returns a short status for the TFT if something went wrong, else ""."""
+    import json
+    import urllib.error
+    req = urllib.request.Request(
+        f"{STATION}/ask", method="POST",
+        data=json.dumps({"text": LOOK_PROMPT, "camera": True}).encode(),
+        headers={"Content-Type": "application/json"})
+    if API_KEY:
+        req.add_header("X-API-Key", API_KEY)
+    try:
+        # long timeout: photo (~1s) + vision model load on first use (~12s)
+        with urllib.request.urlopen(req, timeout=120) as r:
+            print(f"saw: {json.loads(r.read()).get('answer')!r}  (answer is on the TFT)")
+            return ""
+    except urllib.error.HTTPError as e:
+        try:
+            detail = json.loads(e.read()).get("detail", e.reason)
+        except ValueError:
+            detail = e.reason
+        print(f"  !! look failed: {e.code} {detail}")
+        return f"camera: {detail}"
+    except Exception as e:  # noqa: BLE001 - one failed look must not kill the loop
+        print(f"  !! look failed: {e}")
+        return "vision failed - is the station up?"
+
+
 def listen_once() -> None:
     """One push-to-talk cycle: record, upload, print what was heard."""
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:

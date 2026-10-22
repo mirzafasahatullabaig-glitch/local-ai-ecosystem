@@ -28,14 +28,16 @@ PASS = os.environ.get("ECO_MQTT_PASS")
 ESP = "esp32_dev_01"
 PI = "raspberrypi"
 
-# pad (BCM) -> (target_device, action, params). Pads 1-3 command the ESP.
-# Pad 4 is push-to-talk: it records from the I2S mic and sends it to the laptop
-# for speech-to-text (handled locally, not over MQTT) -- see VOICE_PIN below.
+# pad (BCM) -> commands it sends. Pad 1 beeps and blinks the ESP together;
+# pad 2 reads the DHT (the result lands on the ESP OLED, the Pi TFT and the
+# station). Pad 3 is vision: the station photographs through the Pi webcam
+# and describes it on the TFT. Pad 4 is push-to-talk. Pads 3-4 go to the
+# laptop over HTTP, not MQTT -- see voice.py.
 TOUCH_PINS = {
-    5:  (ESP, "beep", {"ms": 300}),
-    6:  (ESP, "blink_led", {"ms": 1000}),
-    13: (ESP, "read_dht", {}),
+    5:  [(ESP, "beep", {"ms": 300}), (ESP, "blink_led", {"ms": 1000})],
+    6:  [(ESP, "read_dht", {})],
 }
+LOOK_PIN = 13   # pad 3 -> voice.look_once() (Pi camera -> station vision -> TFT)
 VOICE_PIN = 16  # pad 4 -> voice.listen_once() (record + upload to the station)
 
 
@@ -66,21 +68,39 @@ def main() -> None:
     print(f"touch pads active via {BROKER}:{PORT}")
 
     GPIO.setmode(GPIO.BCM)
-    for pin in list(TOUCH_PINS) + [VOICE_PIN]:
+    pins = list(TOUCH_PINS) + [LOOK_PIN, VOICE_PIN]
+    for pin in pins:
         GPIO.setup(pin, GPIO.IN)
+
+    def tft(text: str) -> None:
+        # Through the agent's tft_show, not by writing the message file: this
+        # service runs as root, and a root-owned file would lock the agent out.
+        client.publish(f"eco/v1/devices/{PI}/cmd", build_cmd(PI, "tft_show", {"text": text}), qos=1)
 
     # Simple edge poll with debounce: TTP224 holds HIGH while touched. Fire once
     # per touch (rising edge), not continuously.
-    last = {pin: False for pin in list(TOUCH_PINS) + [VOICE_PIN]}
+    last = {pin: False for pin in pins}
     try:
         while True:
-            for pin, (target, action, params) in TOUCH_PINS.items():
+            for pin, cmds in TOUCH_PINS.items():
                 now = GPIO.input(pin) == GPIO.HIGH
                 if now and not last[pin]:
-                    cmd = build_cmd(target, action, params)
-                    client.publish(f"eco/v1/devices/{target}/cmd", cmd, qos=1)
-                    print(f"pad GPIO{pin} -> {target}/{action}")
+                    for target, action, params in cmds:
+                        cmd = build_cmd(target, action, params)
+                        client.publish(f"eco/v1/devices/{target}/cmd", cmd, qos=1)
+                        print(f"pad GPIO{pin} -> {target}/{action}")
                 last[pin] = now
+            # Pad 3: look. Blocks while the station photographs + describes
+            # (~2s warm, ~15s on the first vision call); fine for a tap.
+            look_now = GPIO.input(LOOK_PIN) == GPIO.HIGH
+            if look_now and not last[LOOK_PIN]:
+                print(f"pad GPIO{LOOK_PIN} -> look")
+                tft("looking...")
+                import voice
+                problem = voice.look_once()
+                if problem:
+                    tft(problem)
+            last[LOOK_PIN] = look_now
             # Pad 4: push-to-talk. Record + upload locally (blocks ~4s, fine).
             voice_now = GPIO.input(VOICE_PIN) == GPIO.HIGH
             if voice_now and not last[VOICE_PIN]:

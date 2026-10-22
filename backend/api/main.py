@@ -298,7 +298,7 @@ def create_app(repo: Repository, gateway: ModelGateway,
                 return "vision", shot
             if camera:
                 raise HTTPException(status_code=404,
-                                    detail="no live camera - plug a USB webcam into the Pi")
+                                    detail="no live camera - plug a USB webcam into the Pi, then restart eco-agent")
         return _llm_role(decision.role), None
 
     def _answer(text: str, voice: bool = False, image: str | None = None,
