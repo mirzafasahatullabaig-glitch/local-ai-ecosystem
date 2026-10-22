@@ -9,6 +9,7 @@ Run:  ~/eco-agent/.venv/bin/python ~/eco-agent/pi_agent.py
 from __future__ import annotations
 
 import base64
+import collections
 import glob
 import json
 import os
@@ -85,6 +86,9 @@ def emit_event(client: mqtt.Client, command_id: str, state: proto.State,
     print(f"  -> evt {state.value}")
 
 
+_seen_ids: collections.deque[str] = collections.deque(maxlen=64)
+
+
 def handle_command(client: mqtt.Client, payload: bytes) -> None:
     # Parse through the schema — never hand-roll. A bad command is rejected, not crashed on.
     try:
@@ -92,6 +96,14 @@ def handle_command(client: mqtt.Client, payload: bytes) -> None:
     except Exception as e:  # noqa: BLE001 - want any validation failure here
         print(f"  !! bad command rejected: {e}")
         return
+
+    # QoS 1 means "at least once": after a reconnect the broker may redeliver,
+    # and a retry may resend. Run each command_id once (recovery test: both
+    # devices ran a duplicate twice). 64 ids >> commands in flight at a time.
+    if cmd.command_id in _seen_ids:
+        print(f"command {cmd.command_id}: duplicate ignored")
+        return
+    _seen_ids.append(cmd.command_id)
 
     print(f"command {cmd.command_id}: action={cmd.action} seq={cmd.seq}")
     emit_event(client, cmd.command_id, proto.State.RECEIVED)

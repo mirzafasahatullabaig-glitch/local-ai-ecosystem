@@ -20,6 +20,7 @@
 #include <Wire.h>
 #include <Adafruit_SSD1306.h>
 #include <ArduinoOTA.h>   // over-the-air firmware update over WiFi
+#include <time.h>         // NTP wall clock (configTime / time)
 
 // ===================== FILL THESE IN =====================
 const char* WIFI_SSID     = "YOUR_WIFI_NAME";
@@ -61,7 +62,26 @@ uint32_t msgCounter = 0;
 
 String T(const char* kind) { return String("eco/v1/devices/") + DEVICE_ID + "/" + kind; }
 String newMsgId() { return String(DEVICE_ID) + "-" + String(millis()) + "-" + String(msgCounter++); }
-uint64_t nowMs() { return (uint64_t)millis(); } // shortcut: boot-relative ts, no NTP yet
+// Wall-clock ms from NTP (synced after WiFi comes up), 0 until then. Commands
+// carry epoch-ms issued_at/expires_at, so without this the ESP could neither
+// spot an expired command nor stamp its own commands so the Pi accepts them
+// (boot-relative stamps look decades old to the Pi, which drops them).
+uint64_t epochMs() {
+  time_t t = time(nullptr);
+  return t > 1700000000 ? (uint64_t)t * 1000ULL : 0;   // before 2023 = not synced yet
+}
+uint64_t nowMs() { uint64_t e = epochMs(); return e ? e : (uint64_t)millis(); }
+
+// QoS 1 is "at least once": a reconnect can redeliver a command. Run each
+// command_id once; 16 is far more than are ever in flight.
+String recentIds[16];
+int recentPos = 0;
+bool seenBefore(const char* id) {
+  for (int i = 0; i < 16; i++) if (recentIds[i] == id) return true;
+  recentIds[recentPos] = id;
+  recentPos = (recentPos + 1) % 16;
+  return false;
+}
 
 // --- OLED helper: show two lines of status; no-op if panel absent ---
 void oledShow(const String& l1, const String& l2) {
@@ -156,7 +176,7 @@ void publishManifest() {
   doc["ts"]               = nowMs();
   doc["device_type"]      = "esp32";
   doc["hw"]               = "esp32-devkit";
-  doc["fw_version"]       = "0.4";  // OTA, temp alert, ASCII status icons
+  doc["fw_version"]       = "0.5";  // + NTP time, expiry check, duplicate guard
   doc["protocol_version"] = PROTOCOL_VERSION;
   JsonArray caps = doc["capabilities"].to<JsonArray>();
   auto addCap = [&](const char* name, int dur, bool phys, const char* risk) {
@@ -229,6 +249,16 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   const char* commandId = doc["command_id"] | "";
   const char* action    = doc["action"] | "";
   if (strlen(commandId) == 0) { Serial.println("  !! command missing command_id"); return; }
+  if (seenBefore(commandId)) { Serial.printf("  duplicate %s ignored\n", commandId); return; }
+  // Refuse stale commands once the clock is known (until NTP syncs we can't tell).
+  uint64_t expiresAt = doc["expires_at"] | (uint64_t)0;
+  uint64_t now = epochMs();
+  if (now && expiresAt && now >= expiresAt) {
+    Serial.printf("command %s: expired, not run\n", commandId);
+    publishEvent(commandId, "received");
+    publishEvent(commandId, "expired");
+    return;
+  }
   Serial.printf("command %s: action=%s\n", commandId, action);
   beepMs(60);   // short audible feedback that a command arrived
   publishEvent(commandId, "received");
@@ -287,6 +317,7 @@ void setup() {
   CMD_TOPIC = T("cmd"); EVT_TOPIC = T("evt");
   MANIFEST_TOPIC = T("manifest"); STATE_TOPIC = T("state");
   connectWifi();
+  configTime(0, 0, "pool.ntp.org", "time.google.com");   // UTC; syncs in the background
   mqtt.setServer(MQTT_BROKER, MQTT_PORT);
   mqtt.setBufferSize(1024);
   mqtt.setCallback(onMessage);

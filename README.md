@@ -149,11 +149,13 @@ implementations.
 ## Testing
 
 ```powershell
-pytest -q        # 100 tests, all mocked
+pytest -q                                   # 100 tests, all mocked
+.venv\Scripts\python scripts\check_recovery.py   # LIVE: kills the Pi agent, restarts the station
 ```
 
-Not covered by automated tests (checked by hand so far): broker restart and
-Wi-Fi loss recovery, Pi power loss, duplicate command delivery.
+Latest live results (end to end, failure/recovery, security) and the history
+of every change are in [CHANGELOG.md](CHANGELOG.md). Not yet tested: broker
+restart, Wi-Fi loss, Pi power loss.
 
 ## Benchmarks
 
