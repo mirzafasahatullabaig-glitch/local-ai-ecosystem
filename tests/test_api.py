@@ -390,3 +390,122 @@ def test_vision_hint_without_image_uses_fast_reason_model(client):
     # router says "vision", but /ask carries no image, so don't swap models for it
     body = client.post("/ask", json={"text": "look at this and tell me what MQTT is"}).json()
     assert body["role"] == "reason" and body["model"] == "llama3.2:3b"
+
+
+# --- vision: uploaded image, device camera, /last-image, /transcribe ---
+
+import base64 as _b64  # noqa: E402
+
+PNG_1PX = _b64.b64encode(bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+    "1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082"
+)).decode()
+
+
+def _vision_app(tmp_path, bus=None, images=None):
+    """App whose fake Ollama records each request body."""
+    bodies = []
+
+    def handler(req):
+        import json
+        if req.url.path == "/api/ps":
+            return httpx.Response(200, json={"models": []})
+        body = json.loads(req.content) if req.content else {}
+        bodies.append(body)
+        if body.get("stream"):
+            return httpx.Response(200, content=_ndjson(
+                {"response": "a red square"}, {"response": "", "done": True}))
+        return httpx.Response(200, json={**OK_BODY, "response": "a red square"})
+    http = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://127.0.0.1:11434")
+    app = create_app(SQLiteRepository(str(tmp_path / "t.db")), ModelGateway(http),
+                     bus=bus, images=images)
+    return TestClient(app), bodies
+
+
+def test_uploaded_image_goes_to_vision_model_with_image(tmp_path):
+    c, bodies = _vision_app(tmp_path)
+    r = c.post("/ask", json={"text": "", "image": "data:image/png;base64," + PNG_1PX})
+    body = r.json()
+    assert r.status_code == 200 and body["role"] == "vision"
+    assert body["model"] == "qwen3-vl:2b"             # text primary can't see
+    sent = [b for b in bodies if b.get("prompt")][-1]
+    assert sent["images"] == [PNG_1PX]                 # data: prefix stripped
+    assert sent["prompt"] == api_main.DESCRIBE         # empty text -> describe
+    img = c.get("/last-image")
+    assert img.status_code == 200 and img.headers["content-type"] == "image/png"
+    assert c.get("/status").json()["last"]["image"] is True
+
+
+def test_image_upload_validation(tmp_path):
+    c, bodies = _vision_app(tmp_path)
+    assert c.post("/ask", json={"text": "hi", "image": "not base64!!"}).status_code == 422
+    big = "A" * (api_main.MAX_IMAGE_B64 + 4)
+    assert c.post("/ask", json={"text": "hi", "image": big}).status_code == 413
+    assert not [b for b in bodies if b.get("prompt")]   # nothing reached Ollama
+
+
+def _camera_setup(tmp_path):
+    images = {}
+
+    class CamBus(FakeBus):
+        # stands in for the DeviceListener catching the capture result evt
+        def send_command(self, cmd, collect_ms=2500):
+            if cmd.action == "capture_image":
+                images[cmd.device_id] = {"b64": PNG_1PX, "ts": now_ms()}
+            return super().send_command(cmd, collect_ms)
+
+    bus = CamBus()
+    c, bodies = _vision_app(tmp_path, bus=bus, images=images)
+    _register(c, "raspberrypi", ["capture_image", "tft_show"])
+    return c, bodies, bus
+
+
+def test_camera_flag_captures_from_pi(tmp_path):
+    c, bodies, bus = _camera_setup(tmp_path)
+    r = c.post("/ask", json={"text": "what is on my desk", "camera": True})
+    assert r.json()["role"] == "vision"
+    assert any(s.action == "capture_image" for s in bus.sent)
+    assert [b for b in bodies if b.get("prompt")][-1]["images"] == [PNG_1PX]
+
+
+def test_camera_flag_without_camera_is_clear_error(tmp_path):
+    c, _ = _vision_app(tmp_path, bus=FakeBus(), images={})
+    r = c.post("/ask", json={"text": "what is this", "camera": True})
+    assert r.status_code == 404 and "camera" in r.json()["detail"]
+
+
+def test_typed_vision_question_does_not_trigger_camera(tmp_path):
+    c, bodies, bus = _camera_setup(tmp_path)
+    r = c.post("/ask", json={"text": "let me see, what is MQTT"})
+    assert r.json()["role"] == "reason"
+    assert not any(s.action == "capture_image" for s in bus.sent)
+
+
+def test_voice_see_question_uses_pi_camera(tmp_path, monkeypatch):
+    seg = type("Seg", (), {"text": " what do you see "})
+    fake = type("STT", (), {"transcribe": lambda self, p, beam_size=1: ([seg], None)})()
+    monkeypatch.setattr(api_main, "_STT", fake)
+    c, bodies, bus = _camera_setup(tmp_path)
+    r = c.post("/listen", files={"audio": ("clip.wav", b"RIFF0000", "audio/wav")})
+    assert r.json()["role"] == "vision"
+    assert any(s.action == "capture_image" for s in bus.sent)
+
+
+def test_stream_with_camera_reports_status_then_vision(tmp_path):
+    import json
+    c, bodies, bus = _camera_setup(tmp_path)
+    text = c.post("/ask/stream", json={"text": "", "camera": True}).text
+    events = [json.loads(l[6:]) for l in text.split("\n\n") if l.startswith("data: ")]
+    assert [e["t"] for e in events][:2] == ["status", "route"]
+    assert events[1]["role"] == "vision" and events[1]["model"] == "qwen3-vl:2b"
+    assert events[-1]["t"] == "done" and events[-1]["answer"] == "a red square"
+
+
+def test_transcribe_returns_text_only(tmp_path, monkeypatch):
+    seg = type("Seg", (), {"text": " hello there "})
+    fake = type("STT", (), {"transcribe": lambda self, p, beam_size=1: ([seg], None)})()
+    monkeypatch.setattr(api_main, "_STT", fake)
+    c, bodies = _vision_app(tmp_path)
+    r = c.post("/transcribe", files={"audio": ("speech.webm", b"\x1aE\xdf\xa3", "audio/webm")})
+    assert r.json() == {"transcript": "hello there"}
+    assert not [b for b in bodies if b.get("prompt")]   # no LLM call

@@ -64,6 +64,11 @@
   .states span { display:inline-block; padding:1px 7px; margin:2px; border-radius:6px;
     background:#23303f; font-size:12px; }
   #keybar { display:none; } #keybar.show { display:flex; }
+  .hidden { display:none !important; }
+  .attach { display:flex; gap:10px; align-items:center; margin-top:8px; }
+  .attach img, .qa img { max-width:160px; max-height:120px; border-radius:8px; display:block; }
+  #cam video { width:100%; max-width:480px; border-radius:8px; background:#000; display:block; margin-top:8px; }
+  button.rec { background:var(--bad); }
 </style></head><body>
 
 <header>
@@ -118,8 +123,25 @@
       <h2>Ask</h2>
       <form id="askform" class="row">
         <input id="ask" type="text" aria-label="question" placeholder='Ask, or try "what is the temperature"'>
+        <button id="mic" class="alt" type="button" aria-label="speak your question" title="Speak (click again to stop)">🎤</button>
         <button id="askbtn" type="submit">Ask</button>
       </form>
+      <div class="row">
+        <button class="alt" type="button" onclick="$('file').click()">📷 Photo</button>
+        <button id="webcambtn" class="alt" type="button">Webcam</button>
+        <button id="picambtn" class="alt hidden" type="button" title="Take a photo with the Pi's USB webcam and ask about it">Pi camera</button>
+        <input id="file" type="file" accept="image/*" capture="environment" class="hidden">
+      </div>
+      <div id="cam" class="hidden">
+        <video id="video" autoplay playsinline muted></video>
+        <div class="row"><button id="snap" type="button">Snap</button>
+          <button class="alt" type="button" onclick="stopCam()">Close</button></div>
+      </div>
+      <div id="attach" class="attach hidden">
+        <img id="attachimg" alt="photo to ask about">
+        <div><div class="mut">Photo attached — ask about it, or just press Ask.</div>
+          <button class="alt" type="button" onclick="clearAttach()">Remove</button></div>
+      </div>
       <div class="row">
         <button class="alt" type="button" onclick="quick('what is the temperature in my room')">Room temp</button>
         <button class="alt" type="button" onclick="quick('list devices')">List devices</button>
@@ -178,6 +200,8 @@ function saveKey() {
 let lastDevicesSig = '';
 function renderDevices(devs, now) {
   $('devcount').textContent = `(${devs.filter(d => d.online && !d.stale).length}/${devs.length} live)`;
+  $('picambtn').classList.toggle('hidden', !devs.some(d => d.online && !d.stale &&
+    (d.capabilities || []).some(c => c.name === 'capture_image')));
   // Rebuild only when something changed, so buttons don't flicker under the cursor.
   const sig = JSON.stringify(devs.map(d => [d.device_id, d.online && !d.stale, d.fw_version,
                                             (d.capabilities||[]).map(c => c.name)]));
@@ -231,12 +255,27 @@ function render(s) {
   renderDevices(s.devices || [], s.ts);
   $('last').innerHTML = s.last
     ? `<p class="q">${s.last.voice ? '🎤 ' : ''}${esc(s.last.text)} <span class="mut">· ${age(s.ts - s.last.ts)}</span></p>
+       ${s.last.image ? '<img id="lastimg" alt="photo the answer is about">' : ''}
        <p>${esc(s.last.answer)}</p><p class="mut">${esc(s.last.model)}</p>`
     : 'nothing asked yet';
+  if (s.last && s.last.image) loadLastImage(s.last.ts);
   const log = s.log || [];
   $('log').innerHTML = log.length ? log.map(e =>
     `<li><span class="t">${hhmmss(e.ts)}</span><span class="d">${esc(e.device)}</span><span>${esc(e.text)}</span></li>`
   ).join('') : '<li class="mut">waiting for device events…</li>';
+}
+
+// <img> can't send the API key header, so fetch the photo and show it as a blob URL.
+let lastImgTs = 0, lastImgUrl = '';
+async function loadLastImage(ts) {
+  if (ts !== lastImgTs) {
+    lastImgTs = ts;
+    try {
+      const r = await api('/last-image');
+      if (r.ok) { if (lastImgUrl) URL.revokeObjectURL(lastImgUrl); lastImgUrl = URL.createObjectURL(await r.blob()); }
+    } catch (e) {}
+  }
+  const el = $('lastimg'); if (el && lastImgUrl) el.src = lastImgUrl;
 }
 
 let polling = false;
@@ -251,17 +290,92 @@ async function poll() {
   polling = false;
 }
 
+// ---- photo: upload, laptop webcam, Pi camera ----
+let ATTACH = null;   // base64 JPEG without the data: prefix
+function setAttach(dataUrl) {
+  ATTACH = dataUrl.split(',', 2)[1];
+  $('attachimg').src = dataUrl; $('attach').classList.remove('hidden');
+}
+function clearAttach() { ATTACH = null; $('attach').classList.add('hidden'); $('file').value = ''; }
+// Shrink to <=1024px JPEG in the browser: phone photos are 3-12 MB and the
+// vision model sees no more detail than this anyway.
+function shrink(src) {
+  const w = src.videoWidth || src.naturalWidth || src.width, h = src.videoHeight || src.naturalHeight || src.height;
+  const k = Math.min(1, 1024 / Math.max(w, h));
+  const c = document.createElement('canvas'); c.width = Math.round(w * k); c.height = Math.round(h * k);
+  c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.85);
+}
+$('file').addEventListener('change', () => {
+  const f = $('file').files[0]; if (!f) return;
+  const img = new Image(); img.onload = () => { setAttach(shrink(img)); URL.revokeObjectURL(img.src); };
+  img.src = URL.createObjectURL(f);
+});
+// Webcam/mic need a secure context: fine on http://localhost, blocked on a LAN IP.
+const canMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+let camStream = null;
+if (!canMedia) {
+  for (const id of ['webcambtn', 'mic']) {
+    $(id).disabled = true; $(id).title = 'Needs http://localhost (browsers block camera/mic on plain http)';
+  }
+}
+$('webcambtn').addEventListener('click', async () => {
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: true });
+    $('video').srcObject = camStream; $('cam').classList.remove('hidden');
+  } catch (e) { $('meta').textContent = 'webcam: ' + (e.message || e); }
+});
+function stopCam() {
+  if (camStream) camStream.getTracks().forEach(t => t.stop());
+  camStream = null; $('cam').classList.add('hidden');
+}
+$('snap').addEventListener('click', () => { setAttach(shrink($('video'))); stopCam(); });
+$('picambtn').addEventListener('click', () => ask({ camera: true }));
+
+// ---- mic: record in the browser, Whisper on the laptop, then ask like typed text ----
+let rec = null;
+$('mic').addEventListener('click', async () => {
+  if (rec) { rec.stop(); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { $('meta').textContent = 'mic: ' + (e.message || e); return; }
+  const chunks = [];
+  rec = new MediaRecorder(stream);
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+  rec.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+    $('mic').classList.remove('rec'); $('mic').textContent = '🎤'; rec = null;
+    const type = chunks[0]?.type || 'audio/webm';
+    const fd = new FormData();
+    fd.append('audio', new Blob(chunks, { type }), 'speech.' + (type.includes('ogg') ? 'ogg' : 'webm'));
+    $('meta').textContent = 'transcribing…';
+    try {
+      const r = await api('/transcribe', { method: 'POST', body: fd });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.detail || r.statusText);
+      if (!j.transcript) { $('meta').textContent = "didn't catch that — try again"; return; }
+      $('ask').value = j.transcript; ask();
+    } catch (e) { $('meta').textContent = 'error: ' + (e.message || e); }
+  };
+  rec.start();
+  $('mic').classList.add('rec'); $('mic').textContent = '■'; $('meta').textContent = 'listening… click ■ to stop';
+});
+
 // Not an inline onsubmit: in that scope `ask` resolves to the form's <input id="ask">,
 // so `ask()` threw "ask is not a function" and the Ask button did nothing.
 $('askform').addEventListener('submit', e => { e.preventDefault(); ask(); });
 function quick(t) { $('ask').value = t; ask(); }
-async function ask() {
-  const text = $('ask').value.trim(); if (!text) return;
+async function ask(opts = {}) {
+  const text = $('ask').value.trim();
+  const image = ATTACH, camera = !!opts.camera;
+  if (!text && !image && !camera) return;
   const out = $('out'), meta = $('meta'), btn = $('askbtn');
   out.textContent = ''; meta.textContent = 'thinking…'; btn.disabled = true;
   try {
     const r = await api('/ask/stream', { method:'POST',
-      headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text }) });
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text, image, camera }) });
+    if (!r.ok) { const j = await r.json(); throw new Error(j.detail || r.statusText); }
+    if (image) clearAttach();
     const reader = r.body.getReader(), dec = new TextDecoder();
     let buf = '';
     for (;;) {
@@ -272,7 +386,8 @@ async function ask() {
         const line = buf.slice(0, i); buf = buf.slice(i + 2);
         if (!line.startsWith('data: ')) continue;
         const ev = JSON.parse(line.slice(6));
-        if (ev.t === 'route') {
+        if (ev.t === 'status') { meta.textContent = ev.text; }
+        else if (ev.t === 'route') {
           meta.textContent = `${ev.role} → ${ev.model}` +
             (ev.swap ? ' · loading model, this can take 10–40 s…' : ' · thinking…');
         }

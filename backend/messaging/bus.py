@@ -96,14 +96,18 @@ class DeviceListener:
     so the API can tell the LLM about the room. If `log` (a bounded deque) is
     given, announcements, command events and offline notices are appended to
     it for the web panel — heartbeats are not, they'd drown everything else.
+    If `images` is given, a camera result (evt with `image_b64`) is kept in it
+    per device, the same way readings go into `sensors`.
     """
 
     def __init__(self, registry, broker: str, port: int = 1883,
                  user: str | None = None, password: str | None = None,
-                 sensors: dict | None = None, log=None) -> None:
+                 sensors: dict | None = None, log=None,
+                 images: dict | None = None) -> None:
         self._registry = registry
         self._sensors = sensors
         self._log = log
+        self._images = images
         self._broker = broker
         self._port = port
         self._user = user
@@ -121,7 +125,7 @@ class DeviceListener:
         def on_connect(c, u, flags, rc, props=None):
             c.subscribe("eco/v1/devices/+/manifest", qos=1)
             c.subscribe("eco/v1/devices/+/state", qos=1)
-            if self._sensors is not None or self._log is not None:
+            if self._sensors is not None or self._log is not None                     or self._images is not None:
                 c.subscribe("eco/v1/devices/+/evt", qos=1)
 
         def on_message(c, u, msg):
@@ -139,6 +143,11 @@ class DeviceListener:
                     if self._sensors is not None:
                         self._sensors.update(temperature_c=ev["temperature_c"],
                                              humidity=ev.get("humidity"), ts=now_ms())
+                if isinstance(ev.get("image_b64"), str):
+                    # never put the image itself in the log, just its size
+                    text += f" image {len(ev['image_b64']) * 3 // 4 // 1024} KB"
+                    if self._images is not None:
+                        self._images[device_id] = {"b64": ev["image_b64"], "ts": now_ms()}
                 note(device_id, text)
                 return
             if kind == "manifest":

@@ -8,9 +8,13 @@ Run:  ~/eco-agent/.venv/bin/python ~/eco-agent/pi_agent.py
 """
 from __future__ import annotations
 
+import base64
+import glob
 import json
 import os
 import socket
+import subprocess
+import tempfile
 import sys
 import time
 import uuid
@@ -29,21 +33,36 @@ MANIFEST_TOPIC = proto.device_topic(DEVICE_ID, "manifest")
 STATE_TOPIC = proto.device_topic(DEVICE_ID, "state")
 
 
+def camera_device() -> str | None:
+    """A USB webcam, if one is plugged in. /dev/v4l/by-id lists only real
+    cameras (the Pi's /dev/video10-31 are its codec/ISP, not cameras).
+    ECO_CAMERA_DEV overrides. Checked at connect: plug in, then restart."""
+    override = os.environ.get("ECO_CAMERA_DEV")
+    if override:
+        return override
+    found = sorted(glob.glob("/dev/v4l/by-id/*-video-index0"))
+    return found[0] if found else None
+
+
 def build_manifest() -> proto.Manifest:
     """What this Pi can do. Capabilities are declared, not hardcoded elsewhere."""
+    caps = [
+        proto.Capability(name="ping", max_duration_ms=1000, physical=False, risk="none"),
+        proto.Capability(name="blink_led", max_duration_ms=5000, physical=True, risk="low"),
+        proto.Capability(name="tft_show", max_duration_ms=1000, physical=True, risk="none"),
+        proto.Capability(name="update", max_duration_ms=60000, physical=False, risk="high"),
+    ]
+    if camera_device():   # only offer what the hardware can actually do
+        caps.append(proto.Capability(name="capture_image", max_duration_ms=10000,
+                                     physical=True, risk="low"))
     return proto.Manifest(
         msg_id=uuid.uuid4().hex,
         device_id=DEVICE_ID,
         device_type="raspberry_pi",
         hw=f"{os.uname().machine} {socket.gethostname()}",
-        fw_version="0.2",
+        fw_version="0.3",
         protocol_version=1,
-        capabilities=[
-            proto.Capability(name="ping", max_duration_ms=1000, physical=False, risk="none"),
-            proto.Capability(name="blink_led", max_duration_ms=5000, physical=True, risk="low"),
-            proto.Capability(name="tft_show", max_duration_ms=1000, physical=True, risk="none"),
-            proto.Capability(name="update", max_duration_ms=60000, physical=False, risk="high"),
-        ],
+        capabilities=caps,
     )
 
 
@@ -51,14 +70,18 @@ def build_manifest() -> proto.Manifest:
 TFT_MSG_FILE = "/tmp/eco_tft_msg.txt"
 
 
-def emit_event(client: mqtt.Client, command_id: str, state: proto.State) -> None:
+def emit_event(client: mqtt.Client, command_id: str, state: proto.State,
+               extra: dict | None = None) -> None:
     evt = proto.Event(
         msg_id=uuid.uuid4().hex,
         device_id=DEVICE_ID,
         command_id=command_id,
         state=state,
     )
-    client.publish(EVT_TOPIC, evt.model_dump_json(), qos=1)
+    # extra rides alongside the Event fields (e.g. image_b64), like the ESP's
+    # read_dht result; receivers that only parse Event ignore it.
+    body = evt.model_dump(mode="json") | (extra or {})
+    client.publish(EVT_TOPIC, json.dumps(body), qos=1)
     print(f"  -> evt {state.value}")
 
 
@@ -82,10 +105,14 @@ def handle_command(client: mqtt.Client, payload: bytes) -> None:
 
     # The actual "work". Phase 2 keeps this symbolic: ping is instant, blink
     # sleeps briefly. No LLM-generated code runs here.
-    ok = _do_action(cmd.action, cmd.params)
+    extra = None
+    if cmd.action == "capture_image":
+        ok, extra = _capture_image()
+    else:
+        ok = _do_action(cmd.action, cmd.params)
 
     emit_event(client, cmd.command_id,
-               proto.State.COMPLETED if ok else proto.State.FAILED)
+               proto.State.COMPLETED if ok else proto.State.FAILED, extra)
 
 
 def _do_action(action: str, params: dict) -> bool:
@@ -111,12 +138,40 @@ def _do_action(action: str, params: dict) -> bool:
     return False
 
 
+def _capture_image() -> tuple[bool, dict | None]:
+    """One 640x480 JPEG from the USB webcam, base64 in the result event
+    (~60-100 KB on MQTT, fine for Mosquitto). -S skips the first frames so
+    auto-exposure settles; without it the shot is often dark."""
+    dev = camera_device()
+    if not dev:
+        print("  !! capture_image: no camera")
+        return False, None
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+        path = f.name
+    try:
+        out = subprocess.run(["fswebcam", "-q", "-d", dev, "-r", "640x480", "-S", "10",
+                              "--no-banner", "--jpeg", "85", path],
+                             capture_output=True, text=True, timeout=10)
+        if out.returncode != 0 or os.path.getsize(path) == 0:
+            print(f"  !! capture_image failed: {out.stderr.strip()[:200]}")
+            return False, None
+        with open(path, "rb") as f:
+            return True, {"image_b64": base64.b64encode(f.read()).decode()}
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"  !! capture_image failed: {e}")
+        return False, None
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def _self_update() -> bool:
     """Pull the latest agent from git and restart. High-risk: only reachable by
     an authenticated client on the broker. shortcut: no signature check, trusts
     the broker's password auth; add signing before exposing beyond the LAN.
     """
-    import subprocess
     repo = os.path.dirname(os.path.abspath(__file__))
     try:
         out = subprocess.run(["git", "-C", repo, "pull", "--ff-only"],

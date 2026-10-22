@@ -118,11 +118,15 @@ class ModelGateway:
 
     # --- generation -------------------------------------------------------
 
-    def _generate(self, model: str, prompt: str, keep_alive, options: dict) -> dict:
+    def _generate(self, model: str, prompt: str, keep_alive, options: dict,
+                  images: list[str] | None = None) -> dict:
+        body = {"model": model, "prompt": prompt, "stream": False,
+                "keep_alive": keep_alive, "options": options}
+        if images:
+            body["images"] = images   # base64, no data: prefix (Ollama's format)
         r = self._client.post(
             "/api/generate",
-            json={"model": model, "prompt": prompt, "stream": False,
-                  "keep_alive": keep_alive, "options": options},
+            json=body,
             timeout=self._timeout,
         )
         r.raise_for_status()
@@ -136,10 +140,11 @@ class ModelGateway:
         self._ensure_only(model)
         return {}, "2m"
 
-    def _call_one(self, model: str, prompt: str) -> GatewayResult:
+    def _call_one(self, model: str, prompt: str,
+                  images: list[str] | None = None) -> GatewayResult:
         options, keep_alive = self._prepare(model)
 
-        body = self._generate(model, prompt, keep_alive, options)
+        body = self._generate(model, prompt, keep_alive, options, images)
 
         if model != WARM:
             self._warm_primary()  # restore the warm default
@@ -157,7 +162,12 @@ class ModelGateway:
             return [fallback]
         return [primary, fallback]
 
-    def generate(self, role: str, prompt: str) -> GatewayResult:
+    def first_model(self, role: str) -> str:
+        """The model a request for `role` will try first (for the panel)."""
+        return self._models_for(role)[0]
+
+    def generate(self, role: str, prompt: str,
+                 images: list[str] | None = None) -> GatewayResult:
         """Run the request through the role's models, falling back on failure."""
         if role not in ROLE_MODELS:
             raise GatewayError(f"unknown role: {role}")
@@ -169,7 +179,7 @@ class ModelGateway:
         for i, model in enumerate(candidates):
             tried.append(model)
             try:
-                result = self._call_one(model, prompt)
+                result = self._call_one(model, prompt, images)
                 result.fell_back = i > 0
                 result.tried = tried
                 return result
@@ -181,7 +191,7 @@ class ModelGateway:
             f"all models failed for role {role}: tried {tried} ({last_err})"
         )
 
-    def stream(self, role: str, prompt: str):
+    def stream(self, role: str, prompt: str, images: list[str] | None = None):
         """Like generate(), but a generator: yields text pieces as Ollama makes
         them and returns the final GatewayResult (StopIteration.value). Falls
         back only if a model fails before its first piece — a half-streamed
@@ -197,10 +207,13 @@ class ModelGateway:
             try:
                 options, keep_alive = self._prepare(model)
                 final: dict = {}
+                body = {"model": model, "prompt": prompt, "stream": True,
+                        "keep_alive": keep_alive, "options": options}
+                if images:
+                    body["images"] = images
                 with self._client.stream(
                     "POST", "/api/generate",
-                    json={"model": model, "prompt": prompt, "stream": True,
-                          "keep_alive": keep_alive, "options": options},
+                    json=body,
                     timeout=self._timeout,
                 ) as r:
                     r.raise_for_status()
