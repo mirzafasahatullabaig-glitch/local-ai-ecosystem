@@ -97,7 +97,7 @@ def _do_action(action: str, params: dict) -> bool:
         return True
     if action == "tft_show":
         # Write a message the TFT display script picks up and renders.
-        msg = str(params.get("text", ""))[:120]
+        msg = str(params.get("text", ""))[:300]  # fits ~6 wrapped lines on the TFT
         try:
             with open(TFT_MSG_FILE, "w") as f:
                 f.write(msg)

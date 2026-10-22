@@ -106,9 +106,17 @@ def render(devices: dict, reading: dict) -> Image.Image:
     except OSError:
         msg = ""
     if msg:
-        d.rectangle([0, HEIGHT - 140, WIDTH, HEIGHT - 70], fill=(70, 40, 20))
-        d.text((12, HEIGHT - 132), "MSG:", font=FONT_SM, fill=(255, 200, 120))
-        d.text((12, HEIGHT - 110), msg[:22], font=FONT, fill=(255, 230, 190))
+        # Wrap to the panel width so a full LLM answer is readable, not clipped
+        # at 22 chars. ~26 chars/line at FONT_SM, up to 6 lines then ellipsis.
+        import textwrap
+        lines = textwrap.wrap(msg, width=26)[:6]
+        if len(textwrap.wrap(msg, width=26)) > 6:
+            lines[-1] = lines[-1][:23] + "..."
+        band_top = HEIGHT - 70 - (28 + len(lines) * 18)
+        d.rectangle([0, band_top, WIDTH, HEIGHT - 70], fill=(70, 40, 20))
+        d.text((12, band_top + 6), "MSG:", font=FONT_SM, fill=(255, 200, 120))
+        for i, line in enumerate(lines):
+            d.text((12, band_top + 26 + i * 18), line, font=FONT_SM, fill=(255, 230, 190))
 
     if reading:
         d.rectangle([0, HEIGHT - 70, WIDTH, HEIGHT], fill=(20, 30, 45))

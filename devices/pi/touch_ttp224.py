@@ -28,14 +28,15 @@ PASS = os.environ.get("ECO_MQTT_PASS")
 ESP = "esp32_dev_01"
 PI = "raspberrypi"
 
-# pad (BCM) -> (target_device, action, params). Pads drive BOTH devices: pad 1-3
-# command the ESP, pad 4 shows a message on the Pi's own TFT (touch -> Pi).
+# pad (BCM) -> (target_device, action, params). Pads 1-3 command the ESP.
+# Pad 4 is push-to-talk: it records from the I2S mic and sends it to the laptop
+# for speech-to-text (handled locally, not over MQTT) -- see VOICE_PIN below.
 TOUCH_PINS = {
     5:  (ESP, "beep", {"ms": 300}),
     6:  (ESP, "blink_led", {"ms": 1000}),
     13: (ESP, "read_dht", {}),
-    16: (PI,  "tft_show", {"text": "touched pad 4"}),
 }
+VOICE_PIN = 16  # pad 4 -> voice.listen_once() (record + upload to the station)
 
 
 def build_cmd(target: str, action: str, params: dict) -> str:
@@ -65,12 +66,12 @@ def main() -> None:
     print(f"touch pads active via {BROKER}:{PORT}")
 
     GPIO.setmode(GPIO.BCM)
-    for pin in TOUCH_PINS:
+    for pin in list(TOUCH_PINS) + [VOICE_PIN]:
         GPIO.setup(pin, GPIO.IN)
 
     # Simple edge poll with debounce: TTP224 holds HIGH while touched. Fire once
     # per touch (rising edge), not continuously.
-    last = {pin: False for pin in TOUCH_PINS}
+    last = {pin: False for pin in list(TOUCH_PINS) + [VOICE_PIN]}
     try:
         while True:
             for pin, (target, action, params) in TOUCH_PINS.items():
@@ -80,6 +81,13 @@ def main() -> None:
                     client.publish(f"eco/v1/devices/{target}/cmd", cmd, qos=1)
                     print(f"pad GPIO{pin} -> {target}/{action}")
                 last[pin] = now
+            # Pad 4: push-to-talk. Record + upload locally (blocks ~4s, fine).
+            voice_now = GPIO.input(VOICE_PIN) == GPIO.HIGH
+            if voice_now and not last[VOICE_PIN]:
+                print(f"pad GPIO{VOICE_PIN} -> voice")
+                import voice
+                voice.listen_once()
+            last[VOICE_PIN] = voice_now
             time.sleep(0.03)   # 30ms poll, enough debounce for a finger tap
     except KeyboardInterrupt:
         pass

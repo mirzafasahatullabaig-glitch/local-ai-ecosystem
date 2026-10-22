@@ -9,13 +9,28 @@ from __future__ import annotations
 
 import logging
 import os
+import tempfile
 import time
 import uuid
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
+
+# Lazy singleton: faster-whisper model load is slow, do it once on first /listen.
+_STT = None
+
+
+def _get_stt():
+    global _STT
+    if _STT is None:
+        from faster_whisper import WhisperModel
+        size = os.environ.get("ECO_STT_MODEL", "base")
+        device = os.environ.get("ECO_STT_DEVICE", "auto")
+        # int8 is fast and light; on CUDA faster-whisper still uses the GPU.
+        _STT = WhisperModel(size, device=device, compute_type="int8")
+    return _STT
 
 from backend.device_registry.registry import DeviceRegistry, RegistrationError
 from backend.messaging.bus import DeviceBus, build_command
@@ -187,9 +202,8 @@ def create_app(repo: Repository, gateway: ModelGateway,
         return {"tier": "deterministic", "action": action,
                 "capability": capability, "results": results}
 
-    @app.post("/ask", dependencies=[Depends(require_key)])
-    def ask(req: AskRequest) -> dict:
-        decision = route(req.text)
+    def _answer(text: str) -> dict:
+        decision = route(text)
 
         if decision.tier == "deterministic":
             action = decision.action
@@ -210,7 +224,7 @@ def create_app(repo: Repository, gateway: ModelGateway,
         # LLM tier
         task_id = uuid.uuid4().hex
         try:
-            result = gateway.generate(decision.role, req.text)
+            result = gateway.generate(decision.role, text)
         except GatewayError as e:
             log.warning("ask tier=llm role=%s FAILED: %s", decision.role, e)
             raise HTTPException(status_code=502, detail=str(e))
@@ -220,8 +234,18 @@ def create_app(repo: Repository, gateway: ModelGateway,
             "ask tier=llm role=%s model=%s fell_back=%s total_ms=%s tok/s=%s",
             decision.role, result.model, result.fell_back, m.total_ms, m.tokens_per_s,
         )
-        repo.add_task(task_id, {"created_at": now_ms(), "text": req.text,
+        repo.add_task(task_id, {"created_at": now_ms(), "text": text,
                                 "role": decision.role, "model": result.model})
+        # Mirror the answer to any device that can show it (the Pi TFT). Reuses
+        # the proven tft_show path; best-effort, never fails the HTTP answer.
+        if bus is not None:
+            for dev in registry.find_by_capability("tft_show"):
+                try:
+                    cmd = build_command(dev["device_id"], "tft_show",
+                                        {"text": result.text}, user="api")
+                    bus.send_command(cmd)
+                except Exception as e:  # noqa: BLE001 - display is best-effort
+                    log.warning("tft_show mirror to %s failed: %s", dev["device_id"], e)
         return {
             "tier": "llm",
             "role": decision.role,
@@ -231,6 +255,31 @@ def create_app(repo: Repository, gateway: ModelGateway,
             "metrics": m.__dict__,
             "task_id": task_id,
         }
+
+    @app.post("/ask", dependencies=[Depends(require_key)])
+    def ask(req: AskRequest) -> dict:
+        return _answer(req.text)
+
+    @app.post("/listen", dependencies=[Depends(require_key)])
+    async def listen(audio: UploadFile = File(...)) -> dict:
+        """Voice entry: the Pi uploads a short WAV, we transcribe it on the GPU
+        and run it through the same /ask logic (so the TFT mirror fires too)."""
+        model = _get_stt()
+        data = await audio.read()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(data)
+            path = f.name
+        try:
+            segments, _ = model.transcribe(path, beam_size=1)
+            text = " ".join(s.text for s in segments).strip()
+        finally:
+            os.unlink(path)
+        log.info("listen transcribed %d bytes -> %r", len(data), text)
+        if not text:
+            return {"transcript": "", "answer": None}
+        result = _answer(text)
+        result["transcript"] = text
+        return result
 
     return app
 
