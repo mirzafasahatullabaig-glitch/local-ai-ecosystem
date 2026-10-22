@@ -21,7 +21,7 @@ from backend.messaging.bus import build_command
 from schemas.messages import now_ms
 
 _DEV_HTML = (Path(__file__).with_name("dev.html")).read_text(encoding="utf-8")
-PI_SSH = os.environ.get("ECO_PI_SSH", "pi-user@YOUR_PI_IP")
+PI_SSH = os.environ.get("ECO_PI_SSH", "")   # user@pi-address, set in .env.mqtt
 LOG_FILE = os.environ.get("ECO_LOG_FILE", "api.log")   # start-station.bat appends here
 # source name -> systemd unit on the Pi (None = the station's own api.log).
 # Fixed map: the query string only ever picks a key, never builds a command.
@@ -50,7 +50,9 @@ class DevCommand(BaseModel):
 
 
 def _ssh(cmd: str, timeout: float = 8) -> str | None:
-    """Run a fixed command on the Pi; None if it's unreachable."""
+    """Run a fixed command on the Pi; None if it's unreachable (or not configured)."""
+    if not PI_SSH:
+        return None
     try:
         out = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=4", PI_SSH, cmd],
                              capture_output=True, text=True, timeout=timeout)

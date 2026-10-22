@@ -10,7 +10,7 @@ the cloud.
             browser (panel / dev page)
                     │ HTTP :8000 (API key)
    ┌────────────────▼─────────────────┐        ┌─────────────────────────────┐
-   │ laptop LAPTOP_IP — station    │  MQTT  │ Raspberry Pi YOUR_PI_IP   │
+   │ laptop — the station             │  MQTT  │ Raspberry Pi                │
    │ FastAPI · Ollama (127.0.0.1)     │◄──────►│ Mosquitto (password auth)   │
    │ faster-whisper · router · panel  │ :1883  │ agent · TFT · touch · mic   │
    └──────────────────────────────────┘        │ USB webcam                  │

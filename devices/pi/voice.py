@@ -6,7 +6,7 @@ text through /ask. The LLM answer comes back on the Pi TFT via the existing
 tft_show mirror, so this script only has to capture + upload.
 
 Triggered by touch pad 4 (see touch_ttp224.py). Can also run standalone to test:
-  ECO_STATION=http://LAN_IP:8000 ECO_API_KEY=... python3 voice.py
+  ECO_STATION=http://<laptop-ip>:8000 ECO_API_KEY=... python3 voice.py
 
 INMP441 wiring to the Pi I2S (BCM):
   VDD -> 3V3 | GND -> GND | L/R -> GND (left channel)
@@ -24,7 +24,7 @@ import tempfile
 
 import urllib.request
 
-STATION = os.environ.get("ECO_STATION", "http://LAN_IP:8000")  # laptop
+STATION = os.environ.get("ECO_STATION", "http://localhost:8000")  # set to the laptop in eco.env
 API_KEY = os.environ.get("ECO_API_KEY", "")
 ALSA_DEV = os.environ.get("ECO_ALSA_DEV", "plughw:1,0")  # I2S card from `arecord -l`
 SECONDS = int(os.environ.get("ECO_VOICE_SECONDS", "4"))

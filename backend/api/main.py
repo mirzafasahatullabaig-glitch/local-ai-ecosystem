@@ -566,7 +566,10 @@ def _build_default_app() -> FastAPI:
     supports = os.environ.get("VISION_PRIMARY_IMAGES", "0") == "1"
     gateway = ModelGateway(client, vision_primary_supports_images=supports)
     # Broker on the Pi by default; override with ECO_BROKER.
-    broker = os.environ.get("ECO_BROKER", "YOUR_PI_IP")
+    # The broker's address lives in the gitignored .env.mqtt, not in the code.
+    broker = os.environ.get("ECO_BROKER")
+    if not broker:
+        raise RuntimeError("set ECO_BROKER (the Pi's address) in .env.mqtt")
     port = int(os.environ.get("ECO_BROKER_PORT", "1883"))
     mq_user = os.environ.get("ECO_MQTT_USER")
     mq_pass = os.environ.get("ECO_MQTT_PASS")

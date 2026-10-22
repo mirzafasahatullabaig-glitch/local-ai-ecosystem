@@ -5,8 +5,8 @@
  * Mirrors devices/pi/pi_agent.py. Board: ESP32S3 Dev Module.
  * Libraries (Tools > Manage Libraries): PubSubClient (Nick O'Leary),
  *                                        ArduinoJson v7 (Benoit Blanchon).
- * Verified on hardware 2026-10-21: ESP at LAN_IP, ping + blink_led
- * produced the full event chain through the Pi broker at YOUR_PI_IP.
+ * Verified on hardware 2026-10-21: ping + blink_led produced the full event
+ * chain through the Pi broker.
  */
 #include <WiFi.h>
 #include <PubSubClient.h>
@@ -15,7 +15,7 @@
 // ===================== FILL THESE IN =====================
 const char* WIFI_SSID     = "YOUR_WIFI_NAME";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
-const char* MQTT_BROKER   = "YOUR_PI_IP";   // the Pi
+const char* MQTT_BROKER   = "YOUR_PI_IP";     // the Pi
 const int   MQTT_PORT     = 1883;
 const char* MQTT_USER     = "eco";                 // broker auth (user set on the Pi)
 const char* MQTT_PASS     = "YOUR_BROKER_PASSWORD"; // fill in before flashing; keep out of git

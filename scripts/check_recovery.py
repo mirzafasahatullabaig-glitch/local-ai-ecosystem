@@ -5,7 +5,7 @@ restarts it), sends malformed / unknown / expired / duplicate commands to the
 Pi and the ESP (harmless: ping only), and restarts the station.
 
 Run from the repo root on the laptop:  .venv\Scripts\python scripts\check_recovery.py
-Needs: .env.mqtt, the station running, key-based ssh to pi-user@YOUR_PI_IP.
+Needs: .env.mqtt (incl. ECO_BROKER, ECO_PI_SSH), the station running, key-based ssh to the Pi.
 """
 import json, pathlib, subprocess, sys, threading, time, uuid
 import httpx
@@ -15,7 +15,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 ENV = dict(l.strip().split("=", 1) for l in open(pathlib.Path(__file__).resolve().parents[1] / ".env.mqtt") if "=" in l)
 H = {"X-API-Key": ENV["ECO_API_KEY"]}
 S = "http://127.0.0.1:8000"
-BROKER = "YOUR_PI_IP"
+BROKER = ENV["ECO_BROKER"]
 
 # --- one MQTT client that records every evt ---
 events = []          # (t, topic, payload dict)
@@ -65,7 +65,7 @@ def live(dev):
 
 
 def pi(cmd):
-    return subprocess.run(["ssh", "pi-user@YOUR_PI_IP", cmd], capture_output=True, text=True, timeout=30).stdout.strip()
+    return subprocess.run(["ssh", ENV["ECO_PI_SSH"], cmd], capture_output=True, text=True, timeout=30).stdout.strip()
 
 
 results = []

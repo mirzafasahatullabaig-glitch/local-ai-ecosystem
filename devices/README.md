@@ -47,11 +47,11 @@ Serial at 115200. LED is GPIO 48 (change for your board).
 Laptop issued commands over the LAN to the Pi broker; both devices returned the
 full event chain.
 
-| Device | IP | ping | blink_led | expiry |
-|--------|-----|------|-----------|--------|
-| Pi (`raspberrypi`) | YOUR_PI_IP | ✅ | stub | `received→expired` ✅ |
-| **ESP32 classic (`esp32_dev_01`)** | LAN_IP | ✅ | ✅ **blue LED on GPIO 2 confirmed blinking (2026-10-22)** | issuer-enforced |
-| ESP32-S3 (`esp32_s3_01`) | LAN_IP | ✅ | code ran, LED pin unconfirmed | issuer-enforced |
+| Device | ping | blink_led | expiry |
+|--------|------|-----------|--------|
+| Pi (`raspberrypi`) | ✅ | stub | `received→expired` ✅ |
+| **ESP32 classic (`esp32_dev_01`)** | ✅ | ✅ **blue LED on GPIO 2 confirmed blinking (2026-10-22)** | issuer-enforced |
+| ESP32-S3 (`esp32_s3_01`) | ✅ | code ran, LED pin unconfirmed | issuer-enforced |
 
 > blink_led runs correctly in firmware (executing→completed gap matches the
 > requested ms) but the physical LED did not light — GPIO 48 is likely the
