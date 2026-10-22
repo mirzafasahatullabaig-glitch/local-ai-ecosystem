@@ -45,6 +45,9 @@ DHT dht(DHT_PIN, DHT11);
 Adafruit_SSD1306 oled(128, 64, &Wire, -1);
 bool oledOk = false;                   // false if the panel wasn't found -> skip drawing
 
+// Latest self-read sensor values for the auto status screen (NAN until first read).
+float lastTemp = NAN, lastHum = NAN;
+
 String CMD_TOPIC, EVT_TOPIC, MANIFEST_TOPIC, STATE_TOPIC;
 WiFiClient net;
 PubSubClient mqtt(net);
@@ -61,6 +64,31 @@ void oledShow(const String& l1, const String& l2) {
   oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
   oled.setCursor(0, 0);  oled.println(l1);
   oled.setCursor(0, 16); oled.println(l2);
+  oled.display();
+}
+
+void beepMs(long ms) {
+  // Active buzzer: HIGH = sound. Non-blocking-ish short pulse.
+  digitalWrite(BUZZ_PIN, HIGH); delay(ms); digitalWrite(BUZZ_PIN, LOW);
+}
+
+// Auto status screen: WiFi/MQTT state + IP + latest DHT reading. Called from
+// loop(), so the OLED is useful with no command sent to it.
+void oledStatus() {
+  if (!oledOk) return;
+  oled.clearDisplay();
+  oled.setTextSize(1); oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(0, 0);
+  oled.println(mqtt.connected() ? "eco: ONLINE" : "eco: connecting");
+  oled.setCursor(0, 12);
+  oled.println(WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "no wifi");
+  oled.setCursor(0, 30);
+  if (!isnan(lastTemp)) {
+    oled.setTextSize(2);
+    oled.println(String(lastTemp, 1) + "C " + String(lastHum, 0) + "%");
+  } else {
+    oled.println("DHT: --");
+  }
   oled.display();
 }
 
@@ -142,17 +170,16 @@ bool doAction(const char* action, JsonVariant params, JsonDocument& out) {
     float t = dht.readTemperature();   // Celsius
     float h = dht.readHumidity();
     if (isnan(t) || isnan(h)) return false;   // sensor read failed
+    lastTemp = t; lastHum = h;          // cache for the auto OLED screen
     out["temperature_c"] = t;
     out["humidity"] = h;
-    oledShow("DHT11", String(t, 1) + "C  " + String(h, 0) + "%");
     return true;
   }
 
   if (strcmp(action, "beep") == 0) {
-    // Active buzzer: drive the pin HIGH for the duration (built-in oscillator).
-    // (A passive buzzer would need tone(); this board has an active one.)
+    // Active buzzer: HIGH = sound (built-in oscillator; passive would need tone()).
     long ms = params["ms"] | 300; if (ms > 3000) ms = 3000;
-    digitalWrite(BUZZ_PIN, HIGH); delay(ms); digitalWrite(BUZZ_PIN, LOW);
+    beepMs(ms);
     return true;
   }
 
@@ -175,6 +202,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   const char* action    = doc["action"] | "";
   if (strlen(commandId) == 0) { Serial.println("  !! command missing command_id"); return; }
   Serial.printf("command %s: action=%s\n", commandId, action);
+  beepMs(60);   // short audible feedback that a command arrived
   publishEvent(commandId, "received");
   publishEvent(commandId, "accepted");
   publishEvent(commandId, "executing");
@@ -207,7 +235,8 @@ void connectMqtt() {
       Serial.printf("subscribed %s\n", CMD_TOPIC.c_str());
       publishManifest();
       publishState(true);
-      oledShow("eco: online", String(DEVICE_ID));
+      beepMs(120);           // one beep on connect = "I'm online"
+      oledStatus();
     } else {
       Serial.printf("  failed rc=%d, retry in 2s\n", mqtt.state());
       oledShow("MQTT fail", "rc=" + String(mqtt.state()));
@@ -220,7 +249,7 @@ void setup() {
   Serial.begin(115200);
   delay(300);
   pinMode(LED_PIN, OUTPUT); digitalWrite(LED_PIN, LOW);
-  pinMode(BUZZ_PIN, OUTPUT);
+  pinMode(BUZZ_PIN, OUTPUT); digitalWrite(BUZZ_PIN, LOW);
   dht.begin();
   Wire.begin(OLED_SDA, OLED_SCL);
   oledOk = oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR);  // false if panel not found
@@ -238,10 +267,19 @@ void setup() {
 }
 
 unsigned long lastBeat = 0;
+unsigned long lastSense = 0;
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) connectWifi();
   if (!mqtt.connected()) connectMqtt();
   mqtt.loop();
   if (millis() - lastBeat > 5000) { publishState(true); lastBeat = millis(); }
+  // Self-read the DHT every 5s and refresh the auto OLED status screen, so the
+  // OLED is useful with no command sent. DHT11 can't be read faster than ~2s.
+  if (millis() - lastSense > 5000) {
+    float t = dht.readTemperature(), h = dht.readHumidity();
+    if (!isnan(t) && !isnan(h)) { lastTemp = t; lastHum = h; }
+    oledStatus();
+    lastSense = millis();
+  }
 }
