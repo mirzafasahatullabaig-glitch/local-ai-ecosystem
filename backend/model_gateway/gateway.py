@@ -93,6 +93,14 @@ class ModelGateway:
         r.raise_for_status()
         return [m["name"] for m in r.json().get("models", [])]
 
+    def loaded_details(self) -> list[dict]:
+        """Loaded models with size and GPU memory, for the developer page."""
+        r = self._client.get("/api/ps", timeout=5)
+        r.raise_for_status()
+        return [{"name": m["name"], "size_mb": m.get("size", 0) // 2**20,
+                 "vram_mb": m.get("size_vram", 0) // 2**20, "expires_at": m.get("expires_at")}
+                for m in r.json().get("models", [])]
+
     def _unload(self, model: str) -> None:
         # keep_alive 0 tells Ollama to evict the model immediately.
         self._client.post(

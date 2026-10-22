@@ -97,17 +97,21 @@ class DeviceListener:
     given, announcements, command events and offline notices are appended to
     it for the web panel — heartbeats are not, they'd drown everything else.
     If `images` is given, a camera result (evt with `image_b64`) is kept in it
-    per device, the same way readings go into `sensors`.
+    per device, the same way readings go into `sensors`. If `traffic` (a
+    bounded deque) is given, every message on eco/v1/# is recorded raw for
+    the developer page, images shortened to their size.
     """
 
     def __init__(self, registry, broker: str, port: int = 1883,
                  user: str | None = None, password: str | None = None,
                  sensors: dict | None = None, log=None,
-                 images: dict | None = None) -> None:
+                 images: dict | None = None, traffic=None) -> None:
         self._registry = registry
         self._sensors = sensors
         self._log = log
         self._images = images
+        self._traffic = traffic
+        self._seq = 0
         self._broker = broker
         self._port = port
         self._user = user
@@ -122,14 +126,38 @@ class DeviceListener:
             if self._log is not None:
                 self._log.append({"ts": now_ms(), "device": device_id, "text": text})
 
+        def record(msg) -> None:
+            self._seq += 1
+            text = msg.payload.decode("utf-8", "replace")
+            if '"image_b64"' in text:   # don't ship 100 KB of base64 to the browser
+                try:
+                    body = json.loads(text)
+                    body["image_b64"] = f"<image {len(body['image_b64']) * 3 // 4 // 1024} KB>"
+                    text = json.dumps(body)
+                except (ValueError, TypeError, KeyError):
+                    text = text[:300] + "…"
+            self._traffic.append({"seq": self._seq, "ts": now_ms(), "topic": msg.topic,
+                                  "bytes": len(msg.payload), "retained": bool(msg.retain),
+                                  "payload": text[:4000]})
+
         def on_connect(c, u, flags, rc, props=None):
+            if self._traffic is not None:
+                # One wildcard rather than overlapping subscriptions, so no
+                # message is delivered (and handled) twice.
+                c.subscribe("eco/v1/#", qos=1)
+                return
             c.subscribe("eco/v1/devices/+/manifest", qos=1)
             c.subscribe("eco/v1/devices/+/state", qos=1)
-            if self._sensors is not None or self._log is not None                     or self._images is not None:
+            if self._sensors is not None or self._log is not None or self._images is not None:
                 c.subscribe("eco/v1/devices/+/evt", qos=1)
 
         def on_message(c, u, msg):
-            device_id, kind = msg.topic.split("/")[3], msg.topic.rsplit("/", 1)[-1]
+            if self._traffic is not None:
+                record(msg)
+            parts = msg.topic.split("/")
+            if len(parts) != 5:   # eco/v1/devices/<id>/<kind> only
+                return
+            device_id, kind = parts[3], parts[4]
             if kind == "evt":
                 try:
                     ev = json.loads(msg.payload)

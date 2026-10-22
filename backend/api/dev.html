@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>eco developer</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --line:#2a2e37; --fg:#e6e6e6; --mut:#8b93a1;
+          --ok:#3ecf8e; --bad:#e5534b; --warn:#e3b341; --accent:#5b9bff; --well:#0c0e12; }
+  :root { color-scheme:dark; }   /* dark scrollbars and form controls */
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,sans-serif;
+         padding:16px; max-width:1300px; margin-inline:auto; }
+  header { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  h1 { font-size:19px; margin:0; } a { color:var(--accent); }
+  .mut { color:var(--mut); font-size:12px; } .grow { flex:1; }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .ok { background:var(--ok); } .bad { background:var(--bad); }
+  nav { display:flex; gap:4px; margin:12px 0; flex-wrap:wrap; border-bottom:1px solid var(--line); }
+  nav button { background:none; border:0; color:var(--mut); padding:8px 12px; cursor:pointer;
+               font:inherit; border-bottom:2px solid transparent; }
+  nav button[aria-selected="true"] { color:var(--fg); border-color:var(--accent); }
+  section { display:none; } section.on { display:block; }
+  .card { background:var(--card); border-radius:10px; padding:12px; margin-bottom:12px; min-width:0; }
+  .grid2 { display:grid; gap:12px; grid-template-columns:minmax(0,1fr); }
+  @media (min-width:900px) { .grid2 { grid-template-columns:minmax(0,1fr) minmax(0,1fr); } }
+  pre, .mono { font:12px/1.5 ui-monospace,monospace; }
+  pre { background:var(--well); padding:10px; border-radius:8px; overflow:auto; margin:6px 0 0;
+        white-space:pre-wrap; word-break:break-word; max-height:340px; }
+  table { width:100%; border-collapse:collapse; }
+  td, th { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--mut); font-weight:600; font-size:12px; }
+  tr.sel td { background:#22293a; } tbody tr { cursor:pointer; }
+  .tag { display:inline-block; padding:0 6px; border-radius:5px; background:#23303f; font-size:12px; }
+  .err { color:var(--bad); }
+  input, select, textarea, button.b { font:inherit; color:var(--fg); background:var(--well);
+    border:1px solid var(--line); border-radius:7px; padding:6px 8px; }
+  button.b { background:var(--accent); border:0; color:#fff; cursor:pointer; }
+  button.alt { background:#2a2e37; }
+  textarea { width:100%; min-height:70px; font:12px ui-monospace,monospace; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; }
+  .scroll { max-height:520px; overflow:auto; }
+  .kv { display:grid; grid-template-columns:max-content 1fr; gap:2px 12px; }
+  #keybar { display:none; } #keybar.show { display:flex; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+</style></head><body>
+
+<header>
+  <span id="conn" class="dot bad" title="station connection"></span>
+  <h1>eco developer</h1><span class="grow"></span>
+  <a href="/">panel</a><a href="/docs">API docs</a>
+</header>
+
+<div id="keybar" class="row card"><span>API key:</span>
+  <input id="keyin" type="password" autocomplete="off" aria-label="API key">
+  <button class="b" onclick="saveKey()">Save</button></div>
+
+<nav role="tablist">
+  <button role="tab" data-tab="llm" aria-selected="true">LLM</button>
+  <button role="tab" data-tab="mqtt">MQTT</button>
+  <button role="tab" data-tab="logs">Logs &amp; health</button>
+  <button role="tab" data-tab="devices">Devices</button>
+  <button role="tab" data-tab="api">API</button>
+</nav>
+
+<!-- LLM inspector -->
+<section id="llm" class="on">
+  <div class="card"><b>Loaded in GPU</b> <span id="models" class="mono mut">…</span></div>
+  <div class="grid2">
+    <div class="card scroll"><table>
+      <thead><tr><th>time</th><th>question</th><th>routed → used</th><th>ms</th></tr></thead>
+      <tbody id="traces"><tr><td colspan="4" class="mut">no LLM calls yet — ask something on the panel</td></tr></tbody>
+    </table></div>
+    <div class="card" id="tracedetail"><span class="mut">Select a call to see the exact prompt, timings and answer.</span></div>
+  </div>
+</section>
+
+<!-- MQTT traffic -->
+<section id="mqtt">
+  <div class="card">
+    <div class="row">
+      <input id="mfilter" placeholder="filter topic or payload" aria-label="filter">
+      <label><input type="checkbox" id="mbeats"> heartbeats</label>
+      <label><input type="checkbox" id="mpause"> pause</label>
+      <span class="mut" id="mcount"></span>
+    </div>
+    <div class="scroll"><table class="mono">
+      <thead><tr><th>time</th><th>topic</th><th>bytes</th><th>payload</th></tr></thead>
+      <tbody id="traffic"></tbody></table></div>
+  </div>
+  <div class="card">
+    <b>Send raw command</b> <span class="mut">— only actions the device advertises</span>
+    <div class="row">
+      <select id="cdev" aria-label="device"></select>
+      <select id="cact" aria-label="action"></select>
+      <button class="b" onclick="sendCmd()">Send</button>
+    </div>
+    <textarea id="cparams" aria-label="params JSON">{}</textarea>
+    <pre id="cout" class="mono">—</pre>
+  </div>
+</section>
+
+<!-- logs & health -->
+<section id="logs">
+  <div class="grid2">
+    <div class="card"><b>Laptop</b><div id="hlaptop" class="kv mono"></div></div>
+    <div class="card"><b>Raspberry Pi</b><div id="hpi" class="kv mono"></div></div>
+  </div>
+  <div class="card">
+    <div class="row">
+      <select id="lsrc" aria-label="log source">
+        <option value="api">station api.log</option><option value="agent">Pi eco-agent</option>
+        <option value="tft">Pi eco-tft</option><option value="touch">Pi eco-touch</option>
+        <option value="broker">Pi mosquitto</option></select>
+      <input id="lfilter" placeholder="filter" aria-label="filter log">
+      <label><input type="checkbox" id="lerr"> errors only</label>
+      <button class="b alt" onclick="loadLogs()">Refresh</button>
+      <span class="mut">auto-refresh every 5 s</span>
+    </div>
+    <pre id="logout" class="mono" style="max-height:520px">…</pre>
+  </div>
+</section>
+
+<!-- devices -->
+<section id="devices"><div id="devlist"></div></section>
+
+<!-- API -->
+<section id="api"><div class="card">
+  <p>The station's full API, with request/response schemas, is at <a href="/docs">/docs</a>.
+     Click <b>Authorize</b> there and paste the API key once; it's remembered.</p>
+  <p class="mut">Developer endpoints: <span class="mono">/dev/state</span> (traces, MQTT, devices),
+    <span class="mono">/dev/models</span>, <span class="mono">/dev/command</span>,
+    <span class="mono">/dev/logs?source=api|agent|tft|touch|broker</span>, <span class="mono">/dev/health</span>.
+    Force a model with <span class="mono">{"text": "...", "role": "code"}</span> on <span class="mono">/ask</span>.</p>
+  <b>Try a question with a forced role</b>
+  <div class="row"><input id="rtext" style="flex:1;min-width:200px" placeholder="question" aria-label="question">
+    <select id="rrole" aria-label="role"><option value="">auto</option><option>reason</option><option>code</option>
+      <option>plan</option><option>vision</option></select>
+    <button class="b" onclick="tryRole()">Ask</button></div>
+  <pre id="rout" class="mono">—</pre>
+</div></section>
+
+<script>
+let KEY = '__API_KEY__';
+try { if (!KEY) KEY = localStorage.getItem('ecoKey') || ''; } catch (e) {}
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const hms = ms => new Date(ms).toLocaleTimeString([], {hour12:false});
+const pretty = s => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch (e) { return s; } };
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { 'X-API-Key': KEY, ...(opts.headers || {}) } });
+  if (r.status === 401) { $('keybar').classList.add('show'); throw new Error('API key required'); }
+  return r;
+}
+function saveKey() {
+  KEY = $('keyin').value.trim(); try { localStorage.setItem('ecoKey', KEY); } catch (e) {}
+  $('keybar').classList.remove('show'); tick();
+}
+
+// ---- tabs ----
+let TAB = 'llm';
+document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => {
+  TAB = b.dataset.tab;
+  document.querySelectorAll('nav button').forEach(x => x.setAttribute('aria-selected', x === b));
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === TAB));
+  tick();
+}));
+
+// ---- state: traces, traffic, devices ----
+let SINCE = 0, TRAFFIC = [], TRACES = [], DEVICES = [], selTrace = 0;
+async function loadState() {
+  const r = await api(`/dev/state?since=${SINCE}`); const s = await r.json();
+  TRACES = s.traces; DEVICES = s.devices;
+  if (!$('mpause').checked && s.traffic.length) {
+    TRAFFIC = TRAFFIC.concat(s.traffic).slice(-500);
+    SINCE = s.traffic[s.traffic.length - 1].seq;
+  }
+  renderTraces(); renderTraffic(); renderDevices(); fillCmdForm();
+}
+
+function renderTraces() {
+  $('traces').innerHTML = TRACES.length ? TRACES.map((t, i) => `
+    <tr data-i="${i}" class="${t.ts === selTrace ? 'sel' : ''}">
+      <td class="mono">${hms(t.ts)}</td>
+      <td>${t.voice ? '🎤 ' : ''}${t.image ? '🖼 ' : ''}${esc(t.text).slice(0, 80)}</td>
+      <td><span class="tag">${esc(t.routed)}</span> → <span class="tag">${esc(t.role)}</span>
+          ${t.error ? '<span class="err">error</span>' : esc(t.model || '')}${t.fell_back ? ' <span class="err">fallback</span>' : ''}</td>
+      <td class="mono">${t.metrics ? Math.round(t.metrics.total_ms) : '—'}</td></tr>`).join('')
+    : '<tr><td colspan="4" class="mut">no LLM calls yet — ask something on the panel</td></tr>';
+  const t = TRACES.find(x => x.ts === selTrace);
+  if (t) showTrace(t);
+}
+$('traces').addEventListener('click', e => {
+  const tr = e.target.closest('tr[data-i]'); if (!tr) return;
+  selTrace = TRACES[+tr.dataset.i].ts; renderTraces();
+});
+function showTrace(t) {
+  const m = t.metrics || {};
+  $('tracedetail').innerHTML = `
+    <div class="kv mono">
+      <span class="mut">question</span><span>${esc(t.text)}</span>
+      <span class="mut">router</span><span>${esc(t.routed)} → used ${esc(t.role)}</span>
+      <span class="mut">model</span><span>${esc(t.model || '—')}${t.fell_back ? ' (fallback)' : ''} · tried ${esc((t.tried || []).join(', '))}</span>
+      <span class="mut">input</span><span>${t.voice ? 'voice' : 'text'}${t.image ? ' + image' : ''}</span>
+      <span class="mut">timing</span><span>total ${m.total_ms ?? '—'} ms · load ${m.load_duration_ms ?? '—'} · prompt ${m.prompt_eval_ms ?? '—'} · gen ${m.eval_ms ?? '—'}</span>
+      <span class="mut">tokens</span><span>${m.tokens ?? '—'} · ${m.tokens_per_s ?? '—'} tok/s</span>
+    </div>
+    <b>Prompt sent</b><pre>${esc(t.prompt)}</pre>
+    ${t.error ? `<b class="err">Error</b><pre>${esc(t.error)}</pre>` : `<b>Answer</b><pre>${esc(t.answer)}</pre>`}`;
+}
+
+function renderTraffic() {
+  const f = $('mfilter').value.toLowerCase(), beats = $('mbeats').checked;
+  const rows = TRAFFIC.filter(m => (beats || !m.topic.endsWith('/state')) &&
+    (!f || m.topic.toLowerCase().includes(f) || m.payload.toLowerCase().includes(f))).slice(-200).reverse();
+  $('mcount').textContent = `${rows.length} shown · ${TRAFFIC.length} kept`;
+  $('traffic').innerHTML = rows.map(m => `<tr title="${esc(pretty(m.payload))}">
+    <td>${hms(m.ts)}</td><td>${esc(m.topic.replace('eco/v1/devices/', ''))}${m.retained ? ' <span class="tag">retained</span>' : ''}</td>
+    <td>${m.bytes}</td><td>${esc(m.payload).slice(0, 220)}</td></tr>`).join('');
+}
+['mfilter', 'mbeats'].forEach(id => $(id).addEventListener('input', renderTraffic));
+
+function renderDevices() {
+  if (TAB !== 'devices') return;
+  $('devlist').innerHTML = DEVICES.map(d => {
+    const live = d.online && !d.stale;
+    return `<div class="card"><div class="row"><span class="dot ${live ? 'ok' : 'bad'}"></span>
+      <b>${esc(d.device_id)}</b><span class="mut">${esc(d.device_type)} · ${esc(d.hw)} · fw ${esc(d.fw_version)}
+      · protocol ${esc(d.protocol_version)} · last seen ${d.last_seen ? hms(d.last_seen) : 'never'}</span></div>
+      <pre>${esc(JSON.stringify(d, null, 2))}</pre></div>`;
+  }).join('') || '<div class="card mut">no devices registered</div>';
+}
+
+// ---- raw command ----
+function fillCmdForm() {
+  const live = DEVICES.filter(d => d.online && !d.stale);
+  const cur = $('cdev').value;
+  const opts = live.map(d => `<option ${d.device_id === cur ? 'selected' : ''}>${esc(d.device_id)}</option>`).join('');
+  if ($('cdev').innerHTML !== opts) $('cdev').innerHTML = opts;
+  const dev = live.find(d => d.device_id === $('cdev').value);
+  const acts = (dev ? dev.capabilities : []).map(c => c.name);
+  const curA = $('cact').value;
+  const aopts = acts.map(a => `<option ${a === curA ? 'selected' : ''}>${esc(a)}</option>`).join('');
+  if ($('cact').innerHTML !== aopts) $('cact').innerHTML = aopts;
+}
+$('cdev').addEventListener('change', fillCmdForm);
+async function sendCmd() {
+  let params;
+  try { params = JSON.parse($('cparams').value || '{}'); } catch (e) { $('cout').textContent = 'params: invalid JSON'; return; }
+  $('cout').textContent = 'sending…';
+  try {
+    const r = await api('/dev/command', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ device_id: $('cdev').value, action: $('cact').value, params }) });
+    $('cout').textContent = JSON.stringify(await r.json(), null, 2);
+  } catch (e) { $('cout').textContent = 'error: ' + e.message; }
+}
+
+// ---- models, logs, health ----
+async function loadModels() {
+  const j = await (await api('/dev/models')).json();
+  $('models').textContent = j.error ? 'Ollama: ' + j.error
+    : (j.models.map(m => `${m.name} (${m.vram_mb} MB GPU)`).join(' · ') || 'none');
+}
+async function loadLogs() {
+  const j = await (await api(`/dev/logs?source=${$('lsrc').value}&lines=300`)).json();
+  const f = $('lfilter').value.toLowerCase(), errs = $('lerr').checked;
+  const lines = j.lines.filter(l => (!f || l.toLowerCase().includes(f)) &&
+    (!errs || /error|traceback|fail|warn|!!/i.test(l)));
+  const el = $('logout'), atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+  el.textContent = lines.join('\n') || '(nothing)';
+  if (atEnd) el.scrollTop = el.scrollHeight;
+}
+['lsrc', 'lerr'].forEach(id => $(id).addEventListener('change', loadLogs));
+$('lfilter').addEventListener('input', loadLogs);
+const kv = pairs => pairs.map(([k, v]) => `<span class="mut">${esc(k)}</span><span>${v}</span>`).join('');
+const up = s => s === 'active' ? '<span class="dot ok"></span> active' : `<span class="dot bad"></span> ${esc(s)}`;
+async function loadHealth() {
+  const h = await (await api('/dev/health')).json();
+  const l = h.laptop, g = l.gpu;
+  $('hlaptop').innerHTML = kv([
+    ['CPU', l.cpu_pct != null ? l.cpu_pct + ' %' : '…'],
+    ['RAM', l.ram_used_mb != null ? `${(l.ram_used_mb/1024).toFixed(1)} / ${(l.ram_total_mb/1024).toFixed(1)} GB` : '—'],
+    ['GPU', g ? `${esc(g.name)} · ${g.util_pct}% · ${g.mem_used_mb}/${g.mem_total_mb} MB · ${g.temp_c}°C` : '—'],
+    ['Ollama', h.ollama.up ? '<span class="dot ok"></span> up · ' + (h.ollama.loaded.map(m => esc(m.name)).join(', ') || 'nothing loaded')
+                          : '<span class="dot bad"></span> ' + esc(h.ollama.error)],
+  ]);
+  const p = h.pi;
+  $('hpi').innerHTML = p ? kv([
+    ...Object.entries(p.services).map(([s, v]) => [s, up(v)]),
+    ['CPU temp', p.temp_c != null ? p.temp_c + ' °C' : '—'],
+    ['load (1m)', p.load_1m ?? '—'],
+    ['RAM', p.mem_used_mb != null ? `${p.mem_used_mb} / ${p.mem_total_mb} MB` : '—'],
+    ['uptime', p.uptime_s != null ? `${(p.uptime_s/3600).toFixed(1)} h` : '—'],
+  ]) : '<span class="err">unreachable</span><span>ssh to the Pi failed</span>';
+}
+
+// ---- forced role ----
+async function tryRole() {
+  $('rout').textContent = 'asking…';
+  try {
+    const r = await api('/ask', { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ text: $('rtext').value, role: $('rrole').value || null }) });
+    $('rout').textContent = JSON.stringify(await r.json(), null, 2);
+  } catch (e) { $('rout').textContent = 'error: ' + e.message; }
+}
+
+// ---- polling: only what the open tab needs ----
+let busy = false, slow = 0;
+async function tick() {
+  if (busy) return; busy = true;
+  try {
+    if (TAB === 'llm' || TAB === 'mqtt' || TAB === 'devices') await loadState();
+    if (TAB === 'llm' && slow % 3 === 0) await loadModels();
+    if (TAB === 'logs' && slow % 3 === 0) { await loadHealth(); await loadLogs(); }
+    $('conn').className = 'dot ok';
+  } catch (e) { $('conn').className = 'dot bad'; }
+  slow++; busy = false;
+}
+tick(); setInterval(tick, 1700);
+</script></body></html>

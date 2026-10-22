@@ -20,7 +20,8 @@ import uuid
 from pathlib import Path
 
 import httpx
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Security, UploadFile
+from fastapi.security import APIKeyHeader
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
@@ -117,6 +118,7 @@ def _llm_prompt(text: str, sensors: dict | None, voice: bool) -> str:
     parts.append(text)
     return "\n".join(parts)
 
+from backend.api.dev import PAGE_HEADERS, add_dev_routes
 from backend.device_registry.registry import DeviceRegistry, RegistrationError
 from backend.messaging.bus import DeviceBus, build_command
 from backend.model_gateway.gateway import GatewayError, ModelGateway, ROLE_MODELS, WARM
@@ -140,6 +142,7 @@ class AskRequest(BaseModel):
     text: str = ""
     image: str | None = None   # base64 photo from the panel (upload / webcam)
     camera: bool = False       # take the photo with a device camera (the Pi)
+    role: str | None = None    # developer override: force reason/code/plan/vision
 
 
 class ActionRequest(BaseModel):
@@ -156,34 +159,43 @@ def create_app(repo: Repository, gateway: ModelGateway,
                api_key: str | None = None,
                sensors: dict | None = None,
                event_log=None,
-               images: dict | None = None) -> FastAPI:
-    app = FastAPI(title="local-ai-ecosystem", version="1")
+               images: dict | None = None,
+               traffic=None, traces=None) -> FastAPI:
+    # persistAuthorization: /docs remembers the key after "Authorize"
+    app = FastAPI(title="local-ai-ecosystem", version="1",
+                  swagger_ui_parameters={"persistAuthorization": True})
     registry = DeviceRegistry(repo)
     last: dict = {}        # most recent LLM question/answer, for the panel
     last_image: dict = {}  # the photo that answer was about, served by /last-image
 
-    def require_key(x_api_key: str | None = Header(default=None)) -> None:
+    # APIKeyHeader (not a plain Header param) so /docs gets an "Authorize" button.
+    def require_key(x_api_key: str | None = Security(APIKeyHeader(name="X-API-Key",
+                                                                  auto_error=False))) -> None:
         # No key configured -> open (dev default). Configured -> must match.
         if api_key and x_api_key != api_key:
             raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
 
-    @app.get("/", response_class=HTMLResponse)
-    def index(request: Request) -> str:
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    def index(request: Request) -> HTMLResponse:
         # Embed the key only for the laptop's own browser: the server binds
         # 0.0.0.0, so otherwise anyone on the LAN could read it from the page.
         # Other browsers ask for it once and keep it in localStorage.
         local = request.client is not None and request.client.host in ("127.0.0.1", "::1")
-        return _PANEL_HTML.replace("__API_KEY__", (api_key or "") if local else "")
+        return HTMLResponse(_PANEL_HTML.replace("__API_KEY__", (api_key or "") if local else ""),
+                            headers=PAGE_HEADERS)
 
     @app.get("/health")
     def health() -> dict:
+        """Liveness only, deliberately open (reveals nothing)."""
         return {"status": "ok", "ts": now_ms()}
 
-    @app.get("/models")
+    # Read endpoints are keyed too: /tasks is the question history and
+    # /devices maps the hardware, neither is for anyone on the WiFi.
+    @app.get("/models", dependencies=[Depends(require_key)])
     def models() -> dict:
         return {"roles": {r: list(m) for r, m in ROLE_MODELS.items()}}
 
-    @app.get("/devices")
+    @app.get("/devices", dependencies=[Depends(require_key)])
     def devices() -> dict:
         return {"devices": registry.list()}
 
@@ -196,7 +208,7 @@ def create_app(repo: Repository, gateway: ModelGateway,
         registry.heartbeat(manifest.device_id)
         return {"registered": dev["device_id"]}
 
-    @app.get("/tasks")
+    @app.get("/tasks", dependencies=[Depends(require_key)])
     def tasks() -> dict:
         return {"tasks": repo.list_tasks()}
 
@@ -301,12 +313,32 @@ def create_app(repo: Repository, gateway: ModelGateway,
                                     detail="no live camera - plug a USB webcam into the Pi, then restart eco-agent")
         return _llm_role(decision.role), None
 
+    def _check_role(role: str | None) -> str | None:
+        if role is not None and role not in ROLE_MODELS:
+            raise HTTPException(status_code=422,
+                                detail=f"role must be one of {sorted(ROLE_MODELS)}")
+        return role
+
+    def _trace(text, decision, role, prompt, image, voice, result=None, error=None):
+        """One LLM call, as the developer page shows it."""
+        if traces is None:
+            return
+        traces.append({
+            "ts": now_ms(), "text": text, "voice": voice, "image": bool(image),
+            "routed": decision.role, "role": role,
+            "model": result.model if result else None,
+            "fell_back": result.fell_back if result else None,
+            "tried": list(result.tried) if result else None,
+            "prompt": prompt, "metrics": result.metrics.__dict__ if result else None,
+            "answer": result.text[:4000] if result else None, "error": error,
+        })
+
     def _answer(text: str, voice: bool = False, image: str | None = None,
-                camera: bool = False) -> dict:
+                camera: bool = False, force_role: str | None = None) -> dict:
         text = text.strip() or (DESCRIBE if (image or camera) else text)
         decision = route(text)
 
-        if decision.tier == "deterministic" and not (image or camera):
+        if decision.tier == "deterministic" and not (image or camera or force_role):
             action = decision.action
             if action == "list_devices":
                 log.info("ask tier=deterministic action=list_devices")
@@ -325,13 +357,16 @@ def create_app(repo: Repository, gateway: ModelGateway,
         # LLM tier
         task_id = uuid.uuid4().hex
         role, img = _vision_input(decision, image, camera, auto_camera=voice)
+        role = force_role or role
         _refresh_room_reading(text)
+        prompt = _llm_prompt(text, sensors, voice)
         try:
-            result = gateway.generate(role, _llm_prompt(text, sensors, voice),
-                                      [img] if img else None)
+            result = gateway.generate(role, prompt, [img] if img else None)
         except GatewayError as e:
             log.warning("ask tier=llm role=%s FAILED: %s", role, e)
+            _trace(text, decision, role, prompt, img, voice, error=str(e))
             raise HTTPException(status_code=502, detail=str(e))
+        _trace(text, decision, role, prompt, img, voice, result)
         return _finish_llm(text, role, result, task_id, voice, img)
 
     def _finish_llm(text: str, role: str, result, task_id: str, voice: bool,
@@ -419,7 +454,8 @@ def create_app(repo: Repository, gateway: ModelGateway,
 
     @app.post("/ask", dependencies=[Depends(require_key)])
     def ask(req: AskRequest) -> dict:
-        return _answer(req.text, image=_clean_image(req.image), camera=req.camera)
+        return _answer(req.text, image=_clean_image(req.image), camera=req.camera,
+                       force_role=_check_role(req.role))
 
     @app.post("/ask/stream", dependencies=[Depends(require_key)])
     def ask_stream(req: AskRequest) -> StreamingResponse:
@@ -430,11 +466,12 @@ def create_app(repo: Repository, gateway: ModelGateway,
             return f"data: {json.dumps(obj)}\n\n"
 
         image = _clean_image(req.image)   # reject bad uploads before streaming starts
+        force_role = _check_role(req.role)
         text = req.text.strip() or (DESCRIBE if (image or req.camera) else req.text)
 
         def events():
             decision = route(text)
-            if decision.tier == "deterministic" and not (image or req.camera):
+            if decision.tier == "deterministic" and not (image or req.camera or force_role):
                 try:
                     yield sse({"t": "done", **_answer(text)})
                 except HTTPException as e:
@@ -448,21 +485,24 @@ def create_app(repo: Repository, gateway: ModelGateway,
             except HTTPException as e:
                 yield sse({"t": "error", "detail": e.detail})
                 return
+            role = force_role or role
             # Tell the panel which model is about to run: a specialist swap
             # takes 10-40s, which otherwise looks like a hang.
             model = gateway.first_model(role)
             yield sse({"t": "route", "role": role, "model": model, "swap": model != WARM})
             _refresh_room_reading(text)
-            gen = gateway.stream(role, _llm_prompt(text, sensors, False),
-                                 [img] if img else None)
+            prompt = _llm_prompt(text, sensors, False)
+            gen = gateway.stream(role, prompt, [img] if img else None)
             try:
                 while True:
                     yield sse({"t": "chunk", "text": next(gen)})
             except StopIteration as stop:
+                _trace(text, decision, role, prompt, img, False, stop.value)
                 yield sse({"t": "done", **_finish_llm(text, role, stop.value,
                                                       task_id, False, img)})
             except GatewayError as e:
                 log.warning("ask/stream role=%s FAILED: %s", role, e)
+                _trace(text, decision, role, prompt, img, False, error=str(e))
                 yield sse({"t": "error", "detail": str(e)})
 
         # Sync generator: Starlette iterates it in a worker thread, so the
@@ -506,6 +546,8 @@ def create_app(repo: Repository, gateway: ModelGateway,
         result["transcript"] = text
         return result
 
+    add_dev_routes(app, require_key=require_key, registry=registry, bus=bus,
+                   gateway=gateway, api_key=api_key, traffic=traffic, traces=traces)
     return app
 
 
@@ -533,14 +575,16 @@ def _build_default_app() -> FastAPI:
     sensors: dict = {}   # filled by the listener, read by the LLM prompt
     event_log = collections.deque(maxlen=40)   # filled by the listener, shown on the panel
     images: dict = {}    # latest camera photo per device, filled by the listener
+    traffic = collections.deque(maxlen=500)   # raw MQTT, for the developer page
+    traces = collections.deque(maxlen=100)    # every LLM call, for the developer page
     app = create_app(SQLiteRepository(db), gateway, bus=bus,
                      api_key=os.environ.get("ECO_API_KEY"), sensors=sensors,
-                     event_log=event_log, images=images)
+                     event_log=event_log, images=images, traffic=traffic, traces=traces)
     # Background listener auto-registers devices and keeps them live from their
     # retained manifest + periodic state, so the web UI shows real status.
     listener = DeviceListener(DeviceRegistry(SQLiteRepository(db)), broker, port,
                               mq_user, mq_pass, sensors=sensors, log=event_log,
-                              images=images)
+                              images=images, traffic=traffic)
     listener.start()
     app.state.listener = listener
     # Load Whisper now so the first voice turn isn't a multi-second cold start.
