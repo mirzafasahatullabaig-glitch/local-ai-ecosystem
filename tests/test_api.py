@@ -376,3 +376,10 @@ def test_gateway_stream_falls_back_before_first_piece():
     except StopIteration as stop:
         result = stop.value
     assert pieces == ["ok"] and result.model == "qwen3.5:4b" and result.fell_back
+
+
+def test_room_fact_only_on_room_questions(tmp_path):
+    sensors = {"temperature_c": 24.5, "humidity": 54, "ts": now_ms()}
+    c, prompts = _capturing_app(tmp_path, sensors=sensors)
+    c.post("/ask", json={"text": "what is 2 plus 2"})
+    assert prompts[-1] == "what is 2 plus 2"        # fresh reading, but not asked about

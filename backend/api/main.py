@@ -51,6 +51,10 @@ VOICE_STYLE = "Reply in one or two short sentences."
 TEMP_ALERT_C = 33.0      # same threshold the ESP uses for its HOT alert
 SPEAKING_MS = 90_000     # panel face shows "talking" this long after an answer
 
+
+def _is_room_question(text: str) -> bool:
+    return any(w in text.lower() for w in _ROOM_WORDS)
+
 # Actions the web panel may send to a device. Fixed and server-side: the browser
 # picks one of these names, never arbitrary actions or params. `update` (self-
 # update, risk high) and estop are deliberately not here.
@@ -70,7 +74,9 @@ def _llm_prompt(text: str, sensors: dict | None, voice: bool) -> str:
     parts = []
     if voice:
         parts.append(VOICE_STYLE)
-    if sensors and sensors.get("temperature_c") is not None \
+    # Room questions only: on anything else llama3.2:3b remarks on the fact
+    # ("not relevant to the information provided") instead of ignoring it.
+    if _is_room_question(text) and sensors and sensors.get("temperature_c") is not None \
             and now_ms() - sensors.get("ts", 0) < SENSOR_MAX_AGE_MS:
         # Stated as a plain fact: a 3B model ignored a softer "sensor reading" hint.
         line = (f"Fact: the temperature in the user's room right now is "
@@ -206,7 +212,7 @@ def create_app(repo: Repository, gateway: ModelGateway,
         result evt on its own connection and fills `sensors`."""
         if bus is None or sensors is None:
             return
-        if not any(w in text.lower() for w in _ROOM_WORDS):
+        if not _is_room_question(text):
             return
         if now_ms() - sensors.get("ts", 0) < SENSOR_REFRESH_MS:
             return
