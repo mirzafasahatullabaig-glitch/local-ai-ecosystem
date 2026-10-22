@@ -47,7 +47,12 @@ static const int OLED_SDA  = 21;   // I2C
 static const int OLED_SCL  = 22;
 static const uint8_t OLED_ADDR = 0x3C; // common SSD1306 address (some are 0x3D)
 
-++
+// --- peripherals & cached sensor state ---
+static const int OLED_W = 128, OLED_H = 64;
+DHT dht(DHT_PIN, DHT11);
+Adafruit_SSD1306 oled(OLED_W, OLED_H, &Wire, -1);
+bool oledOk = false;            // set true in setup() if the panel is found
+float lastTemp = NAN, lastHum = NAN;   // last good DHT read, for the auto screen
 
 String CMD_TOPIC, EVT_TOPIC, MANIFEST_TOPIC, STATE_TOPIC;
 WiFiClient net;
