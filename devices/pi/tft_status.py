@@ -99,6 +99,17 @@ def render(devices: dict, reading: dict) -> Image.Image:
                font=FONT_SM, fill=(150, 160, 175))
         y += 58
 
+    # A tft_show message from the agent, if any (shown above the reading band).
+    try:
+        with open("/tmp/eco_tft_msg.txt") as f:
+            msg = f.read().strip()
+    except OSError:
+        msg = ""
+    if msg:
+        d.rectangle([0, HEIGHT - 140, WIDTH, HEIGHT - 70], fill=(70, 40, 20))
+        d.text((12, HEIGHT - 132), "MSG:", font=FONT_SM, fill=(255, 200, 120))
+        d.text((12, HEIGHT - 110), msg[:22], font=FONT, fill=(255, 230, 190))
+
     if reading:
         d.rectangle([0, HEIGHT - 70, WIDTH, HEIGHT], fill=(20, 30, 45))
         t = reading.get("temperature_c")

@@ -19,6 +19,7 @@
 #include <DHT.h>
 #include <Wire.h>
 #include <Adafruit_SSD1306.h>
+#include <ArduinoOTA.h>   // over-the-air firmware update over WiFi
 
 // ===================== FILL THESE IN =====================
 const char* WIFI_SSID     = "YOUR_WIFI_NAME";
@@ -27,7 +28,12 @@ const char* MQTT_BROKER   = "YOUR_PI_IP";   // the Pi
 const int   MQTT_PORT     = 1883;
 const char* MQTT_USER     = "eco";                 // broker auth (user set on the Pi)
 const char* MQTT_PASS     = "YOUR_BROKER_PASSWORD"; // fill in before flashing; keep out of git
+const char* OTA_PASSWORD  = "YOUR_OTA_PASSWORD";    // guards OTA firmware push; keep out of git
 // =========================================================
+
+// Temperature (C) above which the ESP auto-tells the Pi to show an alert.
+// This is the ESP controlling the Pi, with no laptop in the loop.
+static const float TEMP_ALERT_C = 33.0;
 
 static const char* DEVICE_ID = "esp32_dev_01"; // must match ^[a-z0-9_]{3,32}$
 static const int   SCHEMA_VERSION = 1;
@@ -41,12 +47,7 @@ static const int OLED_SDA  = 21;   // I2C
 static const int OLED_SCL  = 22;
 static const uint8_t OLED_ADDR = 0x3C; // common SSD1306 address (some are 0x3D)
 
-DHT dht(DHT_PIN, DHT11);
-Adafruit_SSD1306 oled(128, 64, &Wire, -1);
-bool oledOk = false;                   // false if the panel wasn't found -> skip drawing
-
-// Latest self-read sensor values for the auto status screen (NAN until first read).
-float lastTemp = NAN, lastHum = NAN;
+++
 
 String CMD_TOPIC, EVT_TOPIC, MANIFEST_TOPIC, STATE_TOPIC;
 WiFiClient net;
@@ -70,6 +71,26 @@ void oledShow(const String& l1, const String& l2) {
 void beepMs(long ms) {
   // Active buzzer: HIGH = sound. Non-blocking-ish short pulse.
   digitalWrite(BUZZ_PIN, HIGH); delay(ms); digitalWrite(BUZZ_PIN, LOW);
+}
+
+// Send a command to another device (ESP controlling the Pi). Builds a minimal
+// valid Command and publishes to that device's cmd topic.
+void commandDevice(const char* targetId, const char* action, const char* paramsJson) {
+  JsonDocument c;
+  c["schema_version"] = SCHEMA_VERSION;
+  c["msg_id"] = newMsgId();
+  c["device_id"] = targetId;
+  c["command_id"] = newMsgId();
+  c["action"] = action;
+  JsonDocument p; deserializeJson(p, paramsJson); c["params"] = p;
+  c["issued_at"] = nowMs();
+  c["expires_at"] = nowMs() + 30000;
+  c["seq"] = 0;
+  c["origin"]["user"] = DEVICE_ID;   // the ESP is the origin
+  char buf[256]; size_t n = serializeJson(c, buf);
+  String topic = String("eco/v1/devices/") + targetId + "/cmd";
+  mqtt.publish(topic.c_str(), (const uint8_t*)buf, n, false);
+  Serial.printf("  -> commanded %s: %s\n", targetId, action);
 }
 
 // Auto status screen: WiFi/MQTT state + IP + latest DHT reading. Called from
@@ -263,22 +284,44 @@ void setup() {
   mqtt.setBufferSize(1024);
   mqtt.setCallback(onMessage);
   connectMqtt();
+
+  // OTA: push new firmware over WiFi from Arduino IDE (Port shows as a network
+  // port named by DEVICE_ID). Password-guarded so not anyone on the LAN can flash.
+  ArduinoOTA.setHostname(DEVICE_ID);
+  ArduinoOTA.setPassword(OTA_PASSWORD);
+  ArduinoOTA.onStart([]() { oledShow("OTA update", "incoming..."); });
+  ArduinoOTA.onEnd([]()   { oledShow("OTA done", "rebooting"); });
+  ArduinoOTA.begin();
+
   Serial.println("agent running");
 }
 
 unsigned long lastBeat = 0;
 unsigned long lastSense = 0;
+bool alertActive = false;   // latch so we alert the Pi once per threshold crossing
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) connectWifi();
   if (!mqtt.connected()) connectMqtt();
   mqtt.loop();
+  ArduinoOTA.handle();   // accept OTA firmware pushes
   if (millis() - lastBeat > 5000) { publishState(true); lastBeat = millis(); }
   // Self-read the DHT every 5s and refresh the auto OLED status screen, so the
   // OLED is useful with no command sent. DHT11 can't be read faster than ~2s.
   if (millis() - lastSense > 5000) {
     float t = dht.readTemperature(), h = dht.readHumidity();
-    if (!isnan(t) && !isnan(h)) { lastTemp = t; lastHum = h; }
+    if (!isnan(t) && !isnan(h)) {
+      lastTemp = t; lastHum = h;
+      // ESP -> Pi: on crossing the threshold, tell the Pi to show an alert.
+      // Latched so it fires once per crossing, not every 5s.
+      if (t >= TEMP_ALERT_C && !alertActive) {
+        char msg[48]; snprintf(msg, sizeof(msg), "{\"text\":\"HOT %.0fC @esp\"}", t);
+        commandDevice("raspberrypi", "tft_show", msg);
+        alertActive = true;
+      } else if (t < TEMP_ALERT_C - 1.0 && alertActive) {
+        alertActive = false;   // hysteresis: clear 1C below to avoid flapping
+      }
+    }
     oledStatus();
     lastSense = millis();
   }

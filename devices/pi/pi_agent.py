@@ -36,13 +36,19 @@ def build_manifest() -> proto.Manifest:
         device_id=DEVICE_ID,
         device_type="raspberry_pi",
         hw=f"{os.uname().machine} {socket.gethostname()}",
-        fw_version="0.1",
+        fw_version="0.2",
         protocol_version=1,
         capabilities=[
             proto.Capability(name="ping", max_duration_ms=1000, physical=False, risk="none"),
             proto.Capability(name="blink_led", max_duration_ms=5000, physical=True, risk="low"),
+            proto.Capability(name="tft_show", max_duration_ms=1000, physical=True, risk="none"),
+            proto.Capability(name="update", max_duration_ms=60000, physical=False, risk="high"),
         ],
     )
+
+
+# Where tft_show writes its message; the TFT display script reads this file.
+TFT_MSG_FILE = "/tmp/eco_tft_msg.txt"
 
 
 def emit_event(client: mqtt.Client, command_id: str, state: proto.State) -> None:
@@ -89,8 +95,42 @@ def _do_action(action: str, params: dict) -> bool:
         # shortcut: no real GPIO yet, just a timed stub. Upgrade when the LED is wired.
         time.sleep(min(float(params.get("ms", 500)) / 1000.0, 5.0))
         return True
+    if action == "tft_show":
+        # Write a message the TFT display script picks up and renders.
+        msg = str(params.get("text", ""))[:120]
+        try:
+            with open(TFT_MSG_FILE, "w") as f:
+                f.write(msg)
+            return True
+        except OSError as e:
+            print(f"  !! tft_show write failed: {e}")
+            return False
+    if action == "update":
+        return _self_update()
     print(f"  !! unknown action {action!r}")
     return False
+
+
+def _self_update() -> bool:
+    """Pull the latest agent from git and restart. High-risk: only reachable by
+    an authenticated client on the broker. shortcut: no signature check, trusts
+    the broker's password auth; add signing before exposing beyond the LAN.
+    """
+    import subprocess
+    repo = os.path.dirname(os.path.abspath(__file__))
+    try:
+        out = subprocess.run(["git", "-C", repo, "pull", "--ff-only"],
+                             capture_output=True, text=True, timeout=30)
+        print(f"  update: {out.stdout.strip()} {out.stderr.strip()}")
+        if out.returncode != 0:
+            return False
+        # Re-exec this process with the updated code.
+        print("  update ok, restarting agent")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as e:  # noqa: BLE001
+        print(f"  !! update failed: {e}")
+        return False
+    return True  # not reached (execv replaces the process)
 
 
 def on_connect(client, userdata, flags, reason_code, properties=None):
