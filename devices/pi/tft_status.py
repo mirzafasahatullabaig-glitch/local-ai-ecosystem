@@ -20,6 +20,11 @@ import json
 import os
 import textwrap
 import time
+import sys
+
+# systemd gives us a pipe, so prints were block-buffered and never reached
+# the journal (eco-touch had logged 0 lines ever). Flush per line.
+sys.stdout.reconfigure(line_buffering=True)
 
 try:   # only for the pad-3 live camera preview; the status screen works without it
     import cv2
@@ -309,6 +314,7 @@ def run_preview() -> None:
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     frame = None
+    shown, started = 0, time.time()
     try:
         while os.path.exists(PREVIEW_FLAG):
             ok, f = cap.read()
@@ -317,6 +323,7 @@ def run_preview() -> None:
                 continue
             small = cv2.cvtColor(cv2.resize(f, (WIDTH, 240)), cv2.COLOR_BGR2RGB)
             blit_region(Image.fromarray(small), 0, PREVIEW_Y)
+            shown += 1
         # The driver queues a few frames; drop them so the snap is the moment
         # the finger lifted, not ~4 frames before.
         for _ in range(4):
@@ -329,6 +336,9 @@ def run_preview() -> None:
         tmp = SNAP_FILE + ".tmp.jpg"
         cv2.imwrite(tmp, frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         os.replace(tmp, SNAP_FILE)   # atomic: the touch service never reads half a file
+    held = time.time() - started
+    print(f"preview: {shown} frames in {held:.1f}s ({shown / max(held, 0.01):.1f} fps), "
+          f"snap {'saved' if frame is not None else 'FAILED'}")
     blit(preview_frame_screen("snap!", "looking at it..."))
 
 

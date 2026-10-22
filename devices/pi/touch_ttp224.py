@@ -17,6 +17,11 @@ from __future__ import annotations
 import os
 import time
 import uuid
+import sys
+
+# systemd gives us a pipe, so prints were block-buffered and never reached
+# the journal (eco-touch had logged 0 lines ever). Flush per line.
+sys.stdout.reconfigure(line_buffering=True)
 
 import RPi.GPIO as GPIO
 import paho.mqtt.client as mqtt
