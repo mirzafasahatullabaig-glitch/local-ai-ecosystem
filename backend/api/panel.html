@@ -116,7 +116,7 @@
   <div>
     <div class="card">
       <h2>Ask</h2>
-      <form class="row" onsubmit="ask(); return false;">
+      <form id="askform" class="row">
         <input id="ask" type="text" aria-label="question" placeholder='Ask, or try "what is the temperature"'>
         <button id="askbtn" type="submit">Ask</button>
       </form>
@@ -251,6 +251,9 @@ async function poll() {
   polling = false;
 }
 
+// Not an inline onsubmit: in that scope `ask` resolves to the form's <input id="ask">,
+// so `ask()` threw "ask is not a function" and the Ask button did nothing.
+$('askform').addEventListener('submit', e => { e.preventDefault(); ask(); });
 function quick(t) { $('ask').value = t; ask(); }
 async function ask() {
   const text = $('ask').value.trim(); if (!text) return;
