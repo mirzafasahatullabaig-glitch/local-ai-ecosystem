@@ -7,3 +7,7 @@ bench_results/
 api.log
 # flashable firmware with real creds; the .example is the tracked template
 devices/esp32_dev/eco_esp32_dev.ino
+graphify-out/cache/
+graphify-out/2026-*/
+graphify-out/*.sig
+graphify-out/memory/
