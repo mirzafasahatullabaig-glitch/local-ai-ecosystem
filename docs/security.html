@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>eco Security Assessment</title>
+
+<style>
+  :root { color-scheme: light dark; padding: env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0); }
+  body { margin: 0; font: 14px system-ui, -apple-system, sans-serif; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<style>
+  /* Layout: a one-page assessment — status banner, scorecard, controls with
+     evidence, limitations, reproduce. Palette reads as a calm audit document. */
+  :root {
+    --bg: #f5f6f4; --panel: #ffffff; --ink: #1a1f1a; --muted: #5a6559;
+    --line: #dde2d9; --rule: #c7cfc0;
+    --pass: #2f7d4f; --pass-bg: #e6f2ea; --warn: #9a6b17; --warn-bg: #f7eed8;
+    --accent: #2f5d7d; --accent-bg: #e4edf3;
+    --font-head: "Spectral", Georgia, "Times New Roman", serif;
+    --font-ui: "Inter", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg: #11140f; --panel: #191d16; --ink: #e9ede6; --muted: #9aa693;
+    --line: #2a2f26; --rule: #3a4134;
+    --pass: #6bd98f; --pass-bg: #16301f; --warn: #e0b355; --warn-bg: #332813;
+    --accent: #7db0d4; --accent-bg: #162933; color-scheme: dark;
+  } }
+  :root[data-theme="dark"] {
+    --bg: #11140f; --panel: #191d16; --ink: #e9ede6; --muted: #9aa693;
+    --line: #2a2f26; --rule: #3a4134;
+    --pass: #6bd98f; --pass-bg: #16301f; --warn: #e0b355; --warn-bg: #332813;
+    --accent: #7db0d4; --accent-bg: #162933; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font-ui);
+         line-height: 1.55; }
+  .page { max-width: 820px; margin: 0 auto;
+          padding-left: max(18px, env(safe-area-inset-left, 0px));
+          padding-right: max(18px, env(safe-area-inset-right, 0px));
+          padding-block: 30px 44px; }
+
+  .eyebrow { font: 600 11.5px var(--font-mono); letter-spacing: .14em; text-transform: uppercase;
+             color: var(--accent); }
+  h1 { font-family: var(--font-head); font-weight: 600; font-size: clamp(27px, 5vw, 40px);
+       line-height: 1.1; margin: 6px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  .sub { color: var(--muted); margin: 10px 0 0; max-width: 62ch; }
+  .facts { display: flex; flex-wrap: wrap; gap: 6px 22px; margin-top: 16px;
+           font: 12.5px var(--font-mono); color: var(--muted); }
+  .facts b { color: var(--ink); font-weight: 500; }
+
+  .banner { margin: 24px 0; border: 1px solid var(--line); border-left: 4px solid var(--pass);
+            background: var(--pass-bg); border-radius: 10px; padding: 16px 18px; }
+  .banner .big { font-family: var(--font-head); font-size: 20px; font-weight: 600; color: var(--pass); }
+  .banner p { margin: 4px 0 0; color: var(--ink); font-size: 13.5px; max-width: 64ch; }
+
+  .score { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px;
+           margin: 22px 0; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 13px 14px; }
+  .tile .n { font-family: var(--font-head); font-size: 26px; font-weight: 600; line-height: 1;
+             font-variant-numeric: tabular-nums; }
+  .tile .n.ok { color: var(--pass); } .tile .n.wn { color: var(--warn); }
+  .tile .k { font-size: 11.5px; color: var(--muted); margin-top: 5px; text-transform: uppercase;
+             letter-spacing: .05em; }
+
+  h2 { font-family: var(--font-head); font-size: 19px; font-weight: 600; margin: 34px 0 0;
+       padding-bottom: 7px; border-bottom: 1px solid var(--rule); }
+  .ctrl { padding: 16px 0; border-bottom: 1px solid var(--line); }
+  .ctrl:last-child { border-bottom: 0; }
+  .ctrl h3 { margin: 0; font-size: 15px; display: flex; gap: 10px; align-items: baseline; }
+  .ctrl h3 .idx { font: 600 12px var(--font-mono); color: var(--muted); flex: none; }
+  .ctrl h3 .nm { flex: 1; min-width: 0; }
+  .pill { flex: none; font: 600 10.5px var(--font-mono); letter-spacing: .05em; padding: 2px 9px;
+          border-radius: 20px; text-transform: uppercase; }
+  .pill.pass { background: var(--pass-bg); color: var(--pass); }
+  .pill.note { background: var(--warn-bg); color: var(--warn); }
+  .ctrl .desc { color: var(--muted); font-size: 13px; margin: 7px 0 0; }
+  .ev { margin: 10px 0 0; background: var(--panel); border: 1px solid var(--line);
+        border-radius: 8px; overflow: hidden; }
+  .ev .lbl { font: 600 10.5px var(--font-mono); letter-spacing: .08em; text-transform: uppercase;
+             color: var(--muted); padding: 8px 12px 0; }
+  .ev pre { margin: 6px 0 0; padding: 4px 12px 12px; overflow-x: auto;
+            font: 12px/1.6 var(--font-mono); color: var(--ink); }
+  .ev pre .y { color: var(--pass); } .ev pre .m { color: var(--muted); } .ev pre .w { color: var(--warn); }
+  .cmd { font-family: var(--font-mono); font-size: 11.5px; color: var(--accent);
+         background: var(--accent-bg); padding: 1px 6px; border-radius: 5px; word-break: break-all; }
+
+  .limits { background: var(--warn-bg); border: 1px solid var(--line); border-left: 4px solid var(--warn);
+            border-radius: 10px; padding: 16px 18px; margin-top: 16px; }
+  .limits h2 { border: 0; margin: 0 0 8px; padding: 0; font-size: 16px; }
+  .limits ul { margin: 0; padding-left: 18px; } .limits li { margin: 5px 0; font-size: 13px; }
+  .repro { margin-top: 10px; } .repro pre { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 8px; padding: 12px; overflow-x: auto; font: 12px/1.7 var(--font-mono); }
+  footer { margin-top: 30px; padding-top: 14px; border-top: 1px solid var(--rule);
+           color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 4px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td.r { text-align: right; font-family: var(--font-mono); white-space: nowrap; }
+  .ok { color: var(--pass); font-weight: 600; } .wn { color: var(--warn); font-weight: 600; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="eyebrow">Security Assessment · Self-verified</p>
+  <h1>local-ai-ecosystem</h1>
+  <p class="sub">A local-first AI station (Windows laptop) with a Raspberry Pi broker and an
+     ESP32 device, on a home LAN. Each control below was checked live against the running
+     system and is backed by a reproducible command and an automated test.</p>
+  <div class="facts">
+    <span>Date <b>2026-10-23</b></span>
+    <span>Commit <b>7d6e5c6</b></span>
+    <span>Scope <b>HTTP API · MQTT · local LLM · git</b></span>
+    <span>Method <b>live probes + pytest + pip-audit</b></span>
+  </div>
+
+  <div class="banner">
+    <div class="big">8 of 9 controls verified pass · 1 with a noted limitation</div>
+    <p>No unauthenticated access, no secrets in source, no known dependency vulnerabilities,
+       and the AI cannot drive hardware. The one limitation — unencrypted MQTT on the LAN — is
+       documented, not hidden. This is self-verification, not a third-party audit.</p>
+  </div>
+
+  <div class="score">
+    <div class="tile"><div class="n ok">401</div><div class="k">on every protected endpoint, no key</div></div>
+    <div class="tile"><div class="n ok">0</div><div class="k">secrets in git history</div></div>
+    <div class="tile"><div class="n ok">0</div><div class="k">known dependency CVEs</div></div>
+    <div class="tile"><div class="n ok">100</div><div class="k">automated tests pass</div></div>
+  </div>
+
+  <h2>Controls &amp; evidence</h2>
+
+  <div class="ctrl">
+    <h3><span class="idx">01</span><span class="nm">Every API endpoint is authenticated</span><span class="pill pass">Pass</span></h3>
+    <p class="desc">All requests require a secret key header. Only <span class="cmd">/health</span>
+       (liveness, reveals nothing) and the API docs are open. Probed from another machine on the LAN.</p>
+    <div class="ev"><div class="lbl">Live — requests from the LAN address</div><pre>GET  /devices /models /tasks /status   <span class="y">401</span>
+GET  /dev/state /dev/health /dev/logs   <span class="y">401</span>
+POST /ask   ·   POST /dev/command        <span class="y">401</span>
+GET  /devices  (wrong key)               <span class="y">401</span>
+GET  /devices  (correct key)             <span class="m">200</span>
+GET  /health                             <span class="m">200  (open by design)</span></pre></div>
+  </div>
+
+  <div class="ctrl">
+    <h3><span class="idx">02</span><span class="nm">The API key is never exposed to the network</span><span class="pill pass">Pass</span></h3>
+    <p class="desc">The key is written into the page only when opened on the laptop itself; any other
+       browser enters it once. Both pages set a Content-Security-Policy that forbids sending it anywhere
+       but this server.</p>
+    <div class="ev"><div class="lbl">Live + tests</div><pre>key occurrences in page served to a LAN browser:  <span class="y">0</span>
+tests: test_pages_send_csp_and_hide_key_from_lan   <span class="y">pass</span>
+       test_panel_key_only_embedded_for_loopback   <span class="y">pass</span></pre></div>
+  </div>
+
+  <div class="ctrl">
+    <h3><span class="idx">03</span><span class="nm">The local LLM is not reachable from the network</span><span class="pill pass">Pass</span></h3>
+    <p class="desc">Ollama is bound to loopback only, so no other machine can use or probe the model host.</p>
+    <div class="ev"><div class="lbl">Live</div><pre>127.0.0.1:11434   <span class="y">200</span>   (laptop only)
+LAN IP :11434     <span class="y">refused / timeout</span>
+listening socket  <span class="m">127.0.0.1:11434</span></pre></div>
+  </div>
+
+  <div class="ctrl">
+    <h3><span class="idx">04</span><span class="nm">The MQTT broker requires a password</span><span class="pill note">Pass · limitation</span></h3>
+    <p class="desc">Mosquitto uses password authentication; anonymous and wrong-password clients are
+       refused. The traffic itself is not encrypted — see Limitations.</p>
+    <div class="ev"><div class="lbl">Live (earlier run today; Pi asleep at final pass)</div><pre>anonymous subscribe    <span class="y">Connection Refused: not authorised</span>
+wrong-password subscribe <span class="y">Connection Refused: not authorised</span>
+valid credentials       <span class="m">subscribe succeeds</span></pre></div>
+  </div>
+
+  <div class="ctrl">
+    <h3><span class="idx">05</span><span class="nm">The AI can never issue a hardware command</span><span class="pill pass">Pass</span></h3>
+    <p class="desc">Device commands come only from fixed, server-side lists — never from model output.
+       The panel can send a short whitelist with server-chosen parameters; the developer page only
+       actions a device advertises, capped at 2&nbsp;KB. Self-update and emergency-stop are unreachable
+       from either page.</p>
+    <div class="ev"><div class="lbl">Code + tests</div><pre>LLM output used as a command:  <span class="y">none found (grep)</span>
+panel whitelist: ping, blink_led, beep, read_dht, tft_show, oled_show
+dev command: advertised capabilities only, 2 KB param cap
+tests: panel_action_whitelist · raw_command_only_advertised · forced_role_overrides_router  <span class="y">pass</span></pre></div>
+  </div>
+
+  <div class="ctrl">
+    <h3><span class="idx">06</span><span class="nm">Commands expire and cannot be replayed</span><span class="pill pass">Pass</span></h3>
+    <p class="desc">Every command carries an expiry; devices reject stale commands and ignore a command
+       id they have already run.</p>
+    <div class="ev"><div class="lbl">Live — Raspberry Pi</div><pre>stale command     <span class="y">received → expired</span>  (not executed)
+duplicate command <span class="y">ignored</span>
+test: test_is_expired  <span class="y">pass</span></pre></div>
+  </div>
+
+  <div class="ctrl">
+    <h3><span class="idx">07</span><span class="nm">No secrets or personal information in source control</span><span class="pill pass">Pass</span></h3>
+    <p class="desc">Passwords, the API key, the Wi-Fi name, LAN addresses and usernames live only in
+       gitignored files; tracked files use placeholders. Checked across the entire commit history.</p>
+    <div class="ev"><div class="lbl">Live — full git history scan</div><pre>Wi-Fi password   <span class="y">0</span>      MQTT password  <span class="y">0</span>
+API key          <span class="y">0</span>      LAN addresses  <span class="y">0</span>
+Pi username      <span class="y">0</span>      commit email   <span class="m">GitHub no-reply</span></pre></div>
+  </div>
+
+  <div class="ctrl">
+    <h3><span class="idx">08</span><span class="nm">Dependencies have no known vulnerabilities</span><span class="pill pass">Pass</span></h3>
+    <p class="desc">Scanned with <span class="cmd">pip-audit</span>. One outdated package (<span class="cmd">setuptools</span>,
+       8 flagged CVEs) was found and upgraded during this assessment; the re-scan is clean.</p>
+    <div class="ev"><div class="lbl">Live — before → after</div><pre>before: <span class="w">8 known vulnerabilities in setuptools 65.5.0</span>
+action: upgraded to 84.2.1, pinned in requirements
+after:  <span class="y">No known vulnerabilities found</span></pre></div>
+  </div>
+
+  <div class="ctrl">
+    <h3><span class="idx">09</span><span class="nm">Security behaviour is pinned by automated tests</span><span class="pill pass">Pass</span></h3>
+    <p class="desc">The controls above are covered by named tests, so a regression fails the build rather
+       than slipping through a one-off manual check.</p>
+    <div class="ev"><div class="lbl">Live</div><pre>pytest -q   <span class="y">100 passed</span>   (8 security-specific)</pre></div>
+  </div>
+
+  <div class="limits">
+    <h2>Limitations &amp; what is not claimed</h2>
+    <ul>
+      <li><b>Self-verification, not a third-party audit.</b> Every check is reproducible (commands below), but no external party has reviewed it.</li>
+      <li><b>MQTT is unencrypted on the LAN.</b> The broker password is sent in the clear, so a sniffer on the same Wi-Fi could read it. Acceptable on a trusted home network; add TLS (port 8883) before an untrusted one.</li>
+      <li><b>No emergency-stop on any device.</b> Fine today — the devices have no motors (LEDs, buzzer, screens, a camera). A hardware kill switch and a device-side watchdog are required before any actuator is added.</li>
+      <li><b>Failure cases untested:</b> broker restart, Wi-Fi loss, Pi power loss. The agent-crash and station-restart cases are verified.</li>
+      <li><b>Exposure assumption:</b> nothing is port-forwarded to the internet. The controls hold for a LAN; internet exposure would need more (rate limiting, TLS everywhere, stronger key handling).</li>
+    </ul>
+  </div>
+
+  <div class="repro">
+    <h2>Reproduce this report</h2>
+    <pre>.venv\Scripts\python -m pytest -q          # 100 tests, incl. security
+.venv\Scripts\python -m pip_audit          # dependency CVE scan
+.venv\Scripts\python scripts\check_recovery.py   # live failure/recovery (disrupts devices)
+
+# from another LAN machine — must return 401:
+curl -s -o /dev/null -w "%{http_code}" http://&lt;laptop&gt;:8000/devices
+
+# on the Pi — must say "not authorised":
+mosquitto_sub -h 127.0.0.1 -t 'eco/#' -C 1</pre>
+  </div>
+
+  <footer>
+    Full control write-up lives in <span class="cmd">SECURITY.md</span> in the repository.
+    Generated from live checks on 2026-10-23 at commit 7d6e5c6. Private repository.
+  </footer>
+</div>
+</body>
+</html>

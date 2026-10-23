@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>eco Code Map</title>
+
+<style>
+  :root { color-scheme: light dark; padding: env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0); }
+  body { margin: 0; font: 14px system-ui, -apple-system, sans-serif; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<style>
+  /* Layout: a connection diagram of subsystems up top, a detail column below;
+     everything derives from the graph data embedded at the end of the file. */
+  :root {
+    --bg: #f4f6f8; --panel: #ffffff; --ink: #141922; --muted: #5d6b7d;
+    --line: #d7dde6; --wire: #9aa7b8; --accent: #1f6feb; --accent-soft: #e3edfd;
+    --code: #0b4fa8; --doc: #8a5a00; --test: #2f7d55;
+    --font-ui: "Inter", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg: #0c1016; --panel: #151b24; --ink: #e8edf4; --muted: #93a1b3;
+    --line: #28313d; --wire: #46535f; --accent: #58a6ff; --accent-soft: #163055;
+    --code: #79b8ff; --doc: #e0b050; --test: #68d99a; color-scheme: dark;
+  } }
+  :root[data-theme="dark"] {
+    --bg: #0c1016; --panel: #151b24; --ink: #e8edf4; --muted: #93a1b3;
+    --line: #28313d; --wire: #46535f; --accent: #58a6ff; --accent-soft: #163055;
+    --code: #79b8ff; --doc: #e0b050; --test: #68d99a; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font-ui);
+         line-height: 1.5; }
+  .wrap { padding-left: max(16px, env(safe-area-inset-left, 0px));
+          padding-right: max(16px, env(safe-area-inset-right, 0px));
+          padding-block: 22px; max-width: 1060px; margin: 0 auto; }
+  header h1 { font-size: clamp(22px, 4vw, 30px); margin: 0; letter-spacing: -0.02em;
+              text-wrap: balance; }
+  header p { color: var(--muted); margin: 4px 0 0; max-width: 60ch; }
+  .meta { font-family: var(--font-mono); font-size: 12px; color: var(--muted);
+          margin-top: 8px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 18px 0 8px;
+            font-size: 12.5px; color: var(--muted); align-items: center; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .hint { font-family: var(--font-mono); font-size: 11.5px; }
+
+  figure { margin: 0; background: var(--panel); border: 1px solid var(--line);
+           border-radius: 14px; padding: 8px; overflow-x: auto; }
+  svg { display: block; width: 100%; height: auto; min-width: 640px; }
+  .node rect { fill: var(--panel); stroke: var(--line); stroke-width: 1.5;
+               transition: stroke .15s, filter .15s; cursor: pointer; }
+  .node:hover rect, .node.sel rect { stroke: var(--accent); filter: drop-shadow(0 2px 8px rgba(31,111,235,.25)); }
+  .node .title { font: 600 13px var(--font-ui); fill: var(--ink); }
+  .node .count { font: 500 11px var(--font-mono); fill: var(--muted); }
+  .node .hub { font: 500 10.5px var(--font-mono); fill: var(--code); }
+  .wire { stroke: var(--wire); fill: none; stroke-linecap: round; transition: stroke .15s, opacity .15s; }
+  .dim { opacity: .12; } .lit { stroke: var(--accent); }
+
+  .cards { display: grid; gap: 12px; margin-top: 18px;
+           grid-template-columns: repeat(auto-fill, minmax(248px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          padding: 14px; min-width: 0; scroll-margin-top: 16px; }
+  .card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .card h3 { margin: 0; font-size: 14.5px; display: flex; justify-content: space-between;
+             align-items: baseline; gap: 8px; }
+  .card h3 b { font-weight: 600; } .card h3 em { font-style: normal; font-family: var(--font-mono);
+             font-size: 11px; color: var(--muted); }
+  .card ul { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .card li { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; min-width: 0; }
+  .card li .nm { font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; flex: 1; min-width: 0; }
+  .card li .nm.code { color: var(--code); } .card li .nm.doc { color: var(--doc); }
+  .card li .nm.test { color: var(--test); }
+  .card li .d { font-family: var(--font-mono); font-size: 11px; color: var(--muted);
+                font-variant-numeric: tabular-nums; flex: none; }
+  .card .path { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted);
+                margin-top: 8px; opacity: .8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
+  footer code { font-family: var(--font-mono); background: var(--accent-soft); color: var(--accent);
+                padding: 1px 6px; border-radius: 5px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>eco Code Map</h1>
+    <p>The local-ai-ecosystem station, grouped into subsystems by how the code actually
+       connects. Box size is how much lives in each group; lines are calls and imports
+       crossing between them. Tap a group to trace its links.</p>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <div class="legend">
+    <span><i class="dot" style="background:var(--code)"></i>code</span>
+    <span><i class="dot" style="background:var(--test)"></i>tests</span>
+    <span><i class="dot" style="background:var(--doc)"></i>docs</span>
+    <span class="hint">thicker line = more connections</span>
+  </div>
+
+  <figure><svg id="map" role="img" aria-label="Subsystem connection diagram"></svg></figure>
+
+  <div class="cards" id="cards"></div>
+
+  <footer>
+    472 nodes · 983 edges · 23 communities, built by Graphify from commit
+    <code>70592ca</code>. Rebuild with <code>graphify update .</code>; full detail in
+    <code>graphify-out/graph.html</code> and <code>GRAPH_REPORT.md</code>.
+  </footer>
+</div>
+
+<script id="data" type="application/json">{"groups": [{"id": 0, "name": "Utility Functions", "size": 78, "top": [{"label": "pi_agent.py", "deg": 24, "file": "devices/pi/pi_agent.py", "kind": "code"}, {"label": "time", "deg": 23, "file": "", "kind": "concept"}, {"label": "bench_models.py", "deg": 21, "file": "scripts/bench_models.py", "kind": "code"}, {"label": "check_recovery.py", "deg": 17, "file": "scripts/check_recovery.py", "kind": "code"}, {"label": "json", "deg": 14, "file": "", "kind": "concept"}, {"label": "os", "deg": 13, "file": "", "kind": "concept"}]}, {"id": 1, "name": "App Initialization", "size": 61, "top": [{"label": "main.py", "deg": 50, "file": "backend/api/main.py", "kind": "code"}, {"label": "create_app()", "deg": 48, "file": "backend/api/main.py", "kind": "code"}, {"label": "now_ms()", "deg": 34, "file": "schemas/messages.py", "kind": "code"}, {"label": "build_command()", "deg": 16, "file": "backend/messaging/bus.py", "kind": "code"}, {"label": "_build_default_app()", "deg": 12, "file": "backend/api/main.py", "kind": "code"}, {"label": "_answer()", "deg": 11, "file": "backend/api/main.py", "kind": "code"}]}, {"id": 2, "name": "Test Utilities", "size": 51, "top": [{"label": "test_api.py", "deg": 55, "file": "tests/test_api.py", "kind": "code"}, {"label": "_capturing_app()", "deg": 12, "file": "tests/test_api.py", "kind": "code"}, {"label": "_vision_app()", "deg": 12, "file": "tests/test_api.py", "kind": "code"}, {"label": "FakeBus", "deg": 11, "file": "tests/test_api.py", "kind": true}, {"label": "_camera_setup()", "deg": 9, "file": "tests/test_api.py", "kind": "code"}, {"label": "bus_client()", "deg": 8, "file": "tests/test_api.py", "kind": "code"}]}, {"id": 3, "name": "MQTT Command Bus", "size": 45, "top": [{"label": "messages.py", "deg": 28, "file": "schemas/messages.py", "kind": "code"}, {"label": "bus.py", "deg": 18, "file": "backend/messaging/bus.py", "kind": "code"}, {"label": "test_schemas.py", "deg": 17, "file": "tests/test_schemas.py", "kind": "code"}, {"label": "Command", "deg": 13, "file": "schemas/messages.py", "kind": true}, {"label": "Event", "deg": 11, "file": "schemas/messages.py", "kind": true}, {"label": "pytest", "deg": 11, "file": "", "kind": "concept"}]}, {"id": 4, "name": "Model Gateway", "size": 44, "top": [{"label": "ModelGateway", "deg": 31, "file": "backend/model_gateway/gateway.py", "kind": true}, {"label": "gateway.py", "deg": 15, "file": "backend/model_gateway/gateway.py", "kind": "code"}, {"label": "test_gateway.py", "deg": 12, "file": "tests/test_gateway.py", "kind": "code"}, {"label": "GatewayError", "deg": 9, "file": "backend/model_gateway/gateway.py", "kind": true}, {"label": ".stream()", "deg": 9, "file": "backend/model_gateway/gateway.py", "kind": "code"}, {"label": "make_gateway()", "deg": 8, "file": "tests/test_gateway.py", "kind": "code"}]}, {"id": 5, "name": "Device Registry", "size": 43, "top": [{"label": "test_registry.py", "deg": 16, "file": "tests/test_registry.py", "kind": "code"}, {"label": "DeviceRegistry", "deg": 14, "file": "backend/device_registry/registry.py", "kind": true}, {"label": "Repository", "deg": 13, "file": "backend/storage/sqlite_repo.py", "kind": true}, {"label": "Manifest", "deg": 13, "file": "schemas/messages.py", "kind": true}, {"label": "registry.py", "deg": 10, "file": "backend/device_registry/registry.py", "kind": "code"}, {"label": "RegistrationError", "deg": 8, "file": "backend/device_registry/registry.py", "kind": true}]}, {"id": 6, "name": "Request Routing", "size": 39, "top": [{"label": "Changelog", "deg": 12, "file": "CHANGELOG.md", "kind": "document"}, {"label": "route()", "deg": 11, "file": "backend/orchestrator/router.py", "kind": "code"}, {"label": "local-ai-ecosystem", "deg": 11, "file": "README.md", "kind": "document"}, {"label": "router.py", "deg": 8, "file": "backend/orchestrator/router.py", "kind": "code"}, {"label": "test_router.py", "deg": 5, "file": "tests/test_router.py", "kind": "code"}, {"label": "Status", "deg": 4, "file": "README.md", "kind": "document"}]}, {"id": 7, "name": "TFT Display", "size": 36, "top": [{"label": "tft_status.py", "deg": 28, "file": "devices/pi/tft_status.py", "kind": "code"}, {"label": "main()", "deg": 10, "file": "devices/pi/tft_status.py", "kind": "code"}, {"label": "run_preview()", "deg": 9, "file": "devices/pi/tft_status.py", "kind": "code"}, {"label": "render()", "deg": 8, "file": "devices/pi/tft_status.py", "kind": "code"}, {"label": "blit_region()", "deg": 7, "file": "devices/pi/tft_status.py", "kind": "code"}, {"label": "rpi_gpio", "deg": 7, "file": "", "kind": "concept"}]}, {"id": 8, "name": "Dev Tools", "size": 25, "top": [{"label": "dev.py", "deg": 24, "file": "backend/api/dev.py", "kind": "code"}, {"label": "add_dev_routes()", "deg": 12, "file": "backend/api/dev.py", "kind": "code"}, {"label": "dev_health()", "deg": 6, "file": "backend/api/dev.py", "kind": "code"}, {"label": "_pi_health()", "deg": 4, "file": "backend/api/dev.py", "kind": "code"}, {"label": "_ssh()", "deg": 4, "file": "backend/api/dev.py", "kind": "code"}, {"label": "pathlib", "deg": 4, "file": "", "kind": "concept"}]}, {"id": 9, "name": "SQLite Persistence", "size": 23, "top": [{"label": "SQLiteRepository", "deg": 30, "file": "backend/storage/sqlite_repo.py", "kind": true}, {"label": "sqlite_repo.py", "deg": 13, "file": "backend/storage/sqlite_repo.py", "kind": "code"}, {"label": "test_storage.py", "deg": 7, "file": "tests/test_storage.py", "kind": "code"}, {"label": "threading", "deg": 6, "file": "", "kind": "concept"}, {"label": "test_thread_safe_writes()", "deg": 5, "file": "tests/test_storage.py", "kind": "code"}, {"label": "test_upsert_is_idempotent()", "deg": 5, "file": "tests/test_storage.py", "kind": "code"}]}, {"id": 10, "name": "Dev Tests", "size": 14, "top": [{"label": "test_dev.py", "deg": 26, "file": "tests/test_dev.py", "kind": "code"}, {"label": "_app()", "deg": 14, "file": "tests/test_dev.py", "kind": "code"}, {"label": "test_raw_command_only_advertised_actions()", "deg": 3, "file": "tests/test_dev.py", "kind": "code"}, {"label": "test_dev_models_reports_vram()", "deg": 2, "file": "tests/test_dev.py", "kind": "code"}, {"label": "test_forced_role_overrides_router()", "deg": 2, "file": "tests/test_dev.py", "kind": "code"}, {"label": "test_health_shape()", "deg": 2, "file": "tests/test_dev.py", "kind": "code"}]}, {"id": 11, "name": "Documentation", "size": 2, "top": [{"label": "CLAUDE.md", "deg": 1, "file": "CLAUDE.md", "kind": "document"}, {"label": "graphify", "deg": 1, "file": "CLAUDE.md", "kind": "document"}]}], "links": [{"a": 1, "b": 8, "w": 12}, {"a": 1, "b": 4, "w": 6}, {"a": 1, "b": 3, "w": 15}, {"a": 1, "b": 9, "w": 6}, {"a": 1, "b": 5, "w": 15}, {"a": 1, "b": 6, "w": 5}, {"a": 0, "b": 1, "w": 10}, {"a": 0, "b": 3, "w": 9}, {"a": 0, "b": 7, "w": 14}, {"a": 1, "b": 2, "w": 17}, {"a": 2, "b": 4, "w": 10}, {"a": 2, "b": 9, "w": 10}, {"a": 2, "b": 3, "w": 7}, {"a": 1, "b": 10, "w": 3}, {"a": 4, "b": 10, "w": 3}, {"a": 9, "b": 10, "w": 3}, {"a": 2, "b": 10, "w": 4}, {"a": 0, "b": 4, "w": 4}, {"a": 3, "b": 4, "w": 3}, {"a": 3, "b": 5, "w": 9}, {"a": 0, "b": 8, "w": 5}, {"a": 0, "b": 2, "w": 4}, {"a": 0, "b": 10, "w": 3}, {"a": 5, "b": 9, "w": 5}, {"a": 3, "b": 8, "w": 3}]}</script>
+<script>
+const G = JSON.parse(document.getElementById("data").textContent);
+const byId = Object.fromEntries(G.groups.map(g => [g.id, g]));
+const kindClass = t => t === "document" ? "doc" : (t === true ? "code" : (t || "code"));
+document.getElementById("meta").textContent =
+  G.groups.length + " subsystems shown · " + G.links.length + " cross-group links";
+
+// --- layout: place groups on a tidy grid, order by size, size boxes by sqrt(members) ---
+const NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("map");
+const cols = 4, colW = 230, rowH = 150, padX = 24, padY = 20;
+const groups = [...G.groups].sort((a, b) => b.size - a.size);
+const pos = {};
+groups.forEach((g, i) => {
+  const c = i % cols, r = (i / cols) | 0;
+  const w = Math.round(92 + Math.sqrt(g.size) * 9);
+  const h = Math.round(48 + Math.sqrt(g.size) * 3.3);
+  pos[g.id] = { x: padX + c * colW + (colW - w) / 2, y: padY + r * rowH + (rowH - h) / 2 - 20, w, h };
+});
+const rows = Math.ceil(groups.length / cols);
+const W = padX * 2 + cols * colW, H = padY * 2 + rows * rowH;
+svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+const ctr = id => ({ x: pos[id].x + pos[id].w / 2, y: pos[id].y + pos[id].h / 2 });
+
+// links first (under the boxes)
+const wmax = Math.max(...G.links.map(l => l.w));
+for (const l of G.links) {
+  const a = ctr(l.a), b = ctr(l.b);
+  const p = document.createElementNS(NS, "path");
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2 - Math.abs(a.x - b.x) * 0.08;
+  p.setAttribute("d", `M${a.x} ${a.y} Q${mx} ${my} ${b.x} ${b.y}`);
+  p.setAttribute("class", "wire");
+  p.setAttribute("stroke-width", (1 + (l.w / wmax) * 4.5).toFixed(1));
+  p.dataset.a = l.a; p.dataset.b = l.b;
+  svg.appendChild(p);
+}
+// nodes
+for (const g of groups) {
+  const p = pos[g.id];
+  const grp = document.createElementNS(NS, "g");
+  grp.setAttribute("class", "node"); grp.dataset.id = g.id;
+  grp.setAttribute("tabindex", "0"); grp.setAttribute("role", "button");
+  grp.setAttribute("aria-label", g.name + ", " + g.size + " nodes");
+  grp.innerHTML =
+    `<rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="10"></rect>
+     <text class="title" x="${p.x + p.w / 2}" y="${p.y + 21}" text-anchor="middle">${g.name}</text>
+     <text class="count" x="${p.x + p.w / 2}" y="${p.y + 37}" text-anchor="middle">${g.size} nodes</text>
+     <text class="hub" x="${p.x + p.w / 2}" y="${p.y + p.h - 8}" text-anchor="middle">${g.top[0].label.slice(0, 22)}</text>`;
+  svg.appendChild(grp);
+}
+
+// --- detail cards ---
+const cards = document.getElementById("cards");
+for (const g of groups) {
+  const el = document.createElement("div");
+  el.className = "card"; el.id = "c" + g.id; el.dataset.id = g.id;
+  const items = g.top.map(t =>
+    `<li><span class="nm ${kindClass(t.kind)}" title="${t.label}">${t.label}</span>
+         <span class="d">${t.deg}</span></li>`).join("");
+  const path = (g.top.find(t => t.file) || {}).file || "";
+  el.innerHTML = `<h3><b>${g.name}</b><em>${g.size} nodes</em></h3><ul>${items}</ul>` +
+    (path ? `<div class="path">${path.replace(/[^/]+$/, "")}…</div>` : "");
+  cards.appendChild(el);
+}
+
+// --- focus interaction: highlight a group's links + its card ---
+let sel = null;
+function focus(id) {
+  sel = sel === id ? null : id;
+  document.querySelectorAll(".node").forEach(n => n.classList.toggle("sel", +n.dataset.id === sel));
+  document.querySelectorAll(".card").forEach(c => c.classList.toggle("sel", +c.dataset.id === sel));
+  document.querySelectorAll(".wire").forEach(w => {
+    const on = +w.dataset.a === sel || +w.dataset.b === sel;
+    w.classList.toggle("lit", sel !== null && on);
+    w.classList.toggle("dim", sel !== null && !on);
+  });
+  if (sel !== null) document.getElementById("c" + sel).scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+svg.addEventListener("click", e => { const n = e.target.closest(".node"); if (n) focus(+n.dataset.id); });
+svg.addEventListener("keydown", e => {
+  const n = e.target.closest(".node");
+  if (n && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); focus(+n.dataset.id); }
+});
+cards.addEventListener("click", e => { const c = e.target.closest(".card"); if (c) focus(+c.dataset.id); });
+</script>
+</body>
+</html>

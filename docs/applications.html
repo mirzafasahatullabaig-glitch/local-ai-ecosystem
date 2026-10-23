@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>eco Applications</title>
+
+<style>
+  :root { color-scheme: light dark; padding: env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0); }
+  body { margin: 0; font: 14px system-ui, -apple-system, sans-serif; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<style>
+  /* Layout: a use-cases report — intro, application cards grouped by domain, each
+     with the real fit, what it reuses, and what it would still need; honest close. */
+  :root {
+    --bg: #f6f7f4; --panel: #ffffff; --ink: #18201a; --muted: #566055; --faint: #869081;
+    --line: #dde4da; --rule: #cbd4c6;
+    --accent: #2f7d5f; --accent-bg: #e3f0ea;
+    --reuse: #2f6f7d; --need: #9a6b17;
+    --font-head: "Fraunces", Georgia, serif;
+    --font-ui: "Inter", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg: #0f130f; --panel: #171c17; --ink: #e8ede7; --muted: #99a497; --faint: #6c766a;
+    --line: #262d25; --rule: #333b31; --accent: #62c998; --accent-bg: #14281f;
+    --reuse: #63b8c9; --need: #e0b355; color-scheme: dark;
+  } }
+  :root[data-theme="dark"] {
+    --bg: #0f130f; --panel: #171c17; --ink: #e8ede7; --muted: #99a497; --faint: #6c766a;
+    --line: #262d25; --rule: #333b31; --accent: #62c998; --accent-bg: #14281f;
+    --reuse: #63b8c9; --need: #e0b355; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font-ui); line-height: 1.56; }
+  .page { max-width: 840px; margin: 0 auto;
+          padding-left: max(18px, env(safe-area-inset-left, 0px));
+          padding-right: max(18px, env(safe-area-inset-right, 0px));
+          padding-block: 32px 48px; }
+
+  .eyebrow { font: 600 11.5px var(--font-mono); letter-spacing: .15em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-family: var(--font-head); font-weight: 600; font-size: clamp(27px, 5.3vw, 42px);
+       line-height: 1.05; margin: 7px 0 0; letter-spacing: -0.02em; text-wrap: balance; }
+  .sub { color: var(--muted); margin: 11px 0 0; max-width: 64ch; }
+  .why { background: var(--accent-bg); border: 1px solid var(--line); border-radius: 11px;
+         padding: 14px 16px; margin-top: 18px; font-size: 13.5px; }
+  .why b { color: var(--ink); }
+
+  h2 { font-family: var(--font-head); font-size: 20px; font-weight: 600; margin: 32px 0 4px; letter-spacing: -0.01em; }
+  h2 .d { font: 600 11px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--faint);
+          display: block; margin-bottom: 1px; }
+
+  .grid { display: grid; gap: 12px; margin-top: 14px; grid-template-columns: 1fr; }
+  @media (min-width: 660px) { .grid { grid-template-columns: 1fr 1fr; } }
+  .app { border: 1px solid var(--line); border-radius: 13px; background: var(--panel); padding: 16px 17px;
+         min-width: 0; display: flex; flex-direction: column; }
+  .app h3 { margin: 0; font-family: var(--font-head); font-size: 16.5px; font-weight: 600; }
+  .app p { margin: 7px 0 0; font-size: 13px; color: var(--muted); }
+  .app .meta { margin-top: 11px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+  .app .meta .row { display: grid; grid-template-columns: 62px 1fr; gap: 8px; align-items: baseline; min-width: 0; }
+  .app .meta .k { font: 600 9.5px var(--font-mono); letter-spacing: .05em; text-transform: uppercase; }
+  .app .meta .k.r { color: var(--reuse); } .app .meta .k.n { color: var(--need); }
+  .app .meta .v { color: var(--ink); min-width: 0; }
+
+  .close { background: var(--accent-bg); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-top: 20px; }
+  .close h3 { margin: 0; font-family: var(--font-head); font-size: 17px; }
+  .close p { margin: 8px 0 0; font-size: 14px; }
+  footer { margin-top: 26px; padding-top: 14px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 12.5px; }
+  code { font-family: var(--font-mono); font-size: .9em; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="eyebrow">Applications &amp; Use Cases</p>
+  <h1>Where this project could be used</h1>
+  <p class="sub">The same three pieces — a local AI brain, a device hub, and cheap sensor nodes, all tied
+     together with a safe command protocol — fit a surprising range of real settings. Each use below says
+     what it <em>reuses</em> from the project as-is and what it would still <em>need</em> to be real.</p>
+
+  <div class="why">
+    <b>Why it travels well:</b> it runs fully offline, costs little (a laptop or mini-PC, a Raspberry Pi, a
+    few dollar ESP32s), keeps all data in the building, and the AI can never directly drive hardware — which
+    matters anywhere privacy, cost or safety rules out a cloud assistant.
+  </div>
+
+  <h2><span class="d">Home &amp; personal</span>Everyday living</h2>
+  <div class="grid">
+    <div class="app">
+      <h3>Private smart-home hub</h3>
+      <p>A voice-and-screen assistant that controls lights, reads sensors and answers questions — with
+         nothing sent to the cloud and no subscription.</p>
+      <div class="meta">
+        <div class="row"><span class="k r">Reuses</span><span class="v">voice, vision, sensors, the panel, MQTT devices</span></div>
+        <div class="row"><span class="k n">Needs</span><span class="v">relays/smart plugs as new device types; text-to-speech for spoken replies</span></div>
+      </div>
+    </div>
+    <div class="app">
+      <h3>Elderly / accessibility helper</h3>
+      <p>A simple talking companion: ask by voice, big clear answers on screen, room temperature at a glance,
+         and a camera that can describe what's in front of someone.</p>
+      <div class="meta">
+        <div class="row"><span class="k r">Reuses</span><span class="v">push-to-talk, large-text TFT face, vision describe</span></div>
+        <div class="row"><span class="k n">Needs</span><span class="v">spoken output, simplified prompts, a fall/alert sensor</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h2><span class="d">Learning</span>Education &amp; research</h2>
+  <div class="grid">
+    <div class="app">
+      <h3>Teaching platform for IoT + AI</h3>
+      <p>A ready-made, well-documented example of how embedded devices, messaging, a backend and local AI fit
+         together — with tests and a safety model to learn from.</p>
+      <div class="meta">
+        <div class="row"><span class="k r">Reuses</span><span class="v">the whole stack, the docs, the code map, the protocol</span></div>
+        <div class="row"><span class="k n">Needs</span><span class="v">lab guides / exercises built around the modules</span></div>
+      </div>
+    </div>
+    <div class="app">
+      <h3>Offline AI for low-connectivity places</h3>
+      <p>Schools or clinics with poor internet get an AI helper that works entirely on local hardware — no
+         bandwidth, no per-query cost, data stays on site.</p>
+      <div class="meta">
+        <div class="row"><span class="k r">Reuses</span><span class="v">fully-local models, voice, vision, cheap hardware</span></div>
+        <div class="row"><span class="k n">Needs</span><span class="v">a domain knowledge base; local-language speech models</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h2><span class="d">Work settings</span>Small business &amp; industry</h2>
+  <div class="grid">
+    <div class="app">
+      <h3>Environmental monitoring + AI summaries</h3>
+      <p>Spread ESP32 sensors through a greenhouse, server room, or workshop; the station logs readings, shows
+         them, alerts on thresholds, and answers "how's the room been today?" in plain words.</p>
+      <div class="meta">
+        <div class="row"><span class="k r">Reuses</span><span class="v">sensor nodes, MQTT, the threshold alert, room-aware answers</span></div>
+        <div class="row"><span class="k n">Needs</span><span class="v">a history database + simple charts; more sensor types</span></div>
+      </div>
+    </div>
+    <div class="app">
+      <h3>Private workplace assistant / kiosk</h3>
+      <p>A front-desk or shop-floor screen that answers questions and shows status, where company data must not
+         leave the premises.</p>
+      <div class="meta">
+        <div class="row"><span class="k r">Reuses</span><span class="v">the web panel, streaming answers, local models, API keys</span></div>
+        <div class="row"><span class="k n">Needs</span><span class="v">company documents as a knowledge base; user accounts</span></div>
+      </div>
+    </div>
+    <div class="app">
+      <h3>Maintenance helper with a camera</h3>
+      <p>Hold a part or a panel up to the webcam and ask what it is or whether something looks wrong — an
+         offline visual-inspection aid for technicians.</p>
+      <div class="meta">
+        <div class="row"><span class="k r">Reuses</span><span class="v">webcam + vision model, voice input, the device screen</span></div>
+        <div class="row"><span class="k n">Needs</span><span class="v">a vision model tuned to the specific parts/defects</span></div>
+      </div>
+    </div>
+    <div class="app">
+      <h3>Robotics &amp; automation base</h3>
+      <p>The safe-command protocol (devices declare abilities with a risk level; the AI never commands
+         directly) is a sound foundation for a small robot or automated rig.</p>
+      <div class="meta">
+        <div class="row"><span class="k r">Reuses</span><span class="v">capability protocol, command lifecycle, the safety model</span></div>
+        <div class="row"><span class="k n">Needs</span><span class="v">motors + a hardware kill switch + a device watchdog (both required before any actuator)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="close">
+    <h3>The honest version</h3>
+    <p>As built today, the project is a <b>working personal demonstrator</b>, not a finished product for any of
+       these. But the hard part — the architecture, the messaging, the local-AI plumbing and the safety model —
+       is done and tested, so each use above is a matter of <em>adding</em> to a solid base rather than starting
+       over. The strongest near-term directions are the ones that need the least new hardware: the private
+       smart-home hub, environmental monitoring, and the teaching platform.</p>
+  </div>
+
+  <footer>
+    Applications mapped to the local-ai-ecosystem project as built on 2026-10-23. "Reuses" means it works with
+    today's code; "Needs" is an honest list of what each real deployment would still require.
+  </footer>
+</div>
+</body>
+</html>

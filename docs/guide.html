@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>eco Ecosystem Guide</title>
+
+<style>
+  :root { color-scheme: light dark; padding: env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0); }
+  body { margin: 0; font: 14px system-ui, -apple-system, sans-serif; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<style>
+  /* Layout: a friendly explainer — hero, "what it is", an SVG flow chart of one
+     question's journey, the parts explained plainly, then quick facts. */
+  :root {
+    --bg: #faf7f2; --panel: #ffffff; --ink: #211d17; --muted: #6a6255;
+    --line: #e6ded2; --rule: #d8cdbb;
+    --a1: #c0612c;  /* terracotta — the station/brain */
+    --a2: #2f6f6a;  /* teal — the Pi */
+    --a3: #8a6d1f;  /* ochre — the ESP */
+    --a1bg: #f6e7dc; --a2bg: #dcebe9; --a3bg: #efe6cf;
+    --arrow: #9b9083;
+    --font-head: "Fraunces", Georgia, serif;
+    --font-ui: "Inter", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg: #15120d; --panel: #1e1a14; --ink: #efe9df; --muted: #a79d8c;
+    --line: #2d281f; --rule: #3a3326;
+    --a1: #e2874f; --a2: #5bb0a8; --a3: #d2ad4e;
+    --a1bg: #35241a; --a2bg: #15302d; --a3bg: #302814; --arrow: #6b6253; color-scheme: dark;
+  } }
+  :root[data-theme="dark"] {
+    --bg: #15120d; --panel: #1e1a14; --ink: #efe9df; --muted: #a79d8c;
+    --line: #2d281f; --rule: #3a3326;
+    --a1: #e2874f; --a2: #5bb0a8; --a3: #d2ad4e;
+    --a1bg: #35241a; --a2bg: #15302d; --a3bg: #302814; --arrow: #6b6253; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font-ui); line-height: 1.6; }
+  .page { max-width: 860px; margin: 0 auto;
+          padding-left: max(18px, env(safe-area-inset-left, 0px));
+          padding-right: max(18px, env(safe-area-inset-right, 0px));
+          padding-block: 34px 48px; }
+
+  .eyebrow { font: 600 11.5px var(--font-mono); letter-spacing: .16em; text-transform: uppercase;
+             color: var(--a1); }
+  h1 { font-family: var(--font-head); font-weight: 600; font-size: clamp(30px, 6.5vw, 52px);
+       line-height: 1.02; margin: 8px 0 0; letter-spacing: -0.02em; text-wrap: balance;
+       display: inline-block; }
+  h1::after { content: ""; display: block; width: 68px; height: 3px; margin-top: 14px;
+       background: var(--a1); border-radius: 2px; }
+  .lede { font-size: clamp(15px, 2.4vw, 18px); color: var(--muted); margin: 14px 0 0; max-width: 60ch; }
+  .lede b { color: var(--ink); font-weight: 600; }
+
+  h2 { font-family: var(--font-head); font-weight: 600; font-size: clamp(20px, 3.5vw, 26px);
+       margin: 40px 0 0; letter-spacing: -0.01em; text-wrap: balance; }
+  h2 + .say { color: var(--muted); margin: 4px 0 0; }
+  p { max-width: 64ch; }
+
+  /* three "actors" strip */
+  .actors { display: grid; gap: 12px; margin-top: 18px;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+  .actor { border: 1px solid var(--line); border-radius: 14px; padding: 16px; background: var(--panel); }
+  .actor .tag { font: 600 11px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
+  .actor h3 { font-family: var(--font-head); font-size: 18px; margin: 7px 0 0; font-weight: 600; }
+  .actor p { font-size: 13.5px; color: var(--muted); margin: 6px 0 0; max-width: none; }
+  .actor.s1 { border-top: 3px solid var(--a1); } .actor.s1 .tag { color: var(--a1); }
+  .actor.s2 { border-top: 3px solid var(--a2); } .actor.s2 .tag { color: var(--a2); }
+  .actor.s3 { border-top: 3px solid var(--a3); } .actor.s3 .tag { color: var(--a3); }
+
+  figure { margin: 18px 0 0; background: var(--panel); border: 1px solid var(--line);
+           border-radius: 16px; padding: 10px; overflow-x: auto; }
+  svg { display: block; width: 100%; height: auto; min-width: 560px; }
+  .flow-cap { font-size: 12.5px; color: var(--muted); margin: 8px 2px 0; }
+
+  /* step list */
+  .steps { list-style: none; counter-reset: s; padding: 0; margin: 18px 0 0;
+           display: flex; flex-direction: column; gap: 12px; }
+  .steps li { counter-increment: s; display: grid; grid-template-columns: 34px 1fr; gap: 14px;
+              align-items: start; min-width: 0; }
+  .steps li::before { content: counter(s); font-family: var(--font-head); font-weight: 600;
+              font-size: 15px; color: var(--a1); background: var(--a1bg); width: 34px; height: 34px;
+              border-radius: 50%; display: grid; place-items: center; }
+  .steps h4 { margin: 4px 0 0; font-size: 15px; }
+  .steps p { margin: 2px 0 0; font-size: 13.5px; color: var(--muted); max-width: none; }
+
+  /* feature cards */
+  .feat { display: grid; gap: 12px; margin-top: 18px;
+          grid-template-columns: repeat(auto-fill, minmax(236px, 1fr)); }
+  .fcard { border: 1px solid var(--line); border-radius: 12px; padding: 15px; background: var(--panel);
+           min-width: 0; }
+  .fcard h4 { margin: 0; font-size: 14.5px; }
+  .fcard p { margin: 6px 0 0; font-size: 13px; color: var(--muted); max-width: none; }
+
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px;
+           margin-top: 18px; }
+  .fact { border: 1px solid var(--line); border-radius: 10px; padding: 14px 15px; background: var(--panel);
+          border-top: 2px solid var(--a1); }
+  .fact .n { font-family: var(--font-head); font-size: 27px; font-weight: 600; line-height: 1;
+             font-variant-numeric: tabular-nums; color: var(--a1); }
+  .fact .k { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.35; }
+
+  .note { border-left: 3px solid var(--a2); background: var(--a2bg); border-radius: 0 10px 10px 0;
+          padding: 13px 16px; margin-top: 18px; font-size: 13.5px; }
+  .note b { color: var(--ink); }
+  footer { margin-top: 36px; padding-top: 14px; border-top: 1px solid var(--rule);
+           color: var(--muted); font-size: 12.5px; }
+  code { font-family: var(--font-mono); font-size: .9em; background: var(--a1bg); color: var(--a1);
+         padding: 1px 5px; border-radius: 4px; }
+  :focus-visible { outline: 2px solid var(--a1); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="eyebrow">Project Guide</p>
+  <h1>Your pocket robotics lab</h1>
+  <p class="lede">A little AI that lives on your own machines. You <b>talk, type, or show it a
+     photo</b>, and a <b>local language model</b> answers — no cloud, no accounts. It also reads the
+     room temperature and lights up a friendly face on a small screen. Three devices, working together
+     over your Wi-Fi.</p>
+
+  <h2>The three parts</h2>
+  <p class="say">Think of it as a brain, a helper, and a sensor.</p>
+  <div class="actors">
+    <div class="actor s1"><div class="tag">The brain · laptop</div>
+      <h3>The station</h3>
+      <p>Runs the AI models (for chat, speech, and vision), the web page you control it from, and the
+         logic that ties everything together.</p></div>
+    <div class="actor s2"><div class="tag">The helper · Raspberry Pi</div>
+      <h3>The hub</h3>
+      <p>A tiny computer that passes messages between devices, shows the bot's face on a screen, and
+         carries the touch pads, microphone and webcam.</p></div>
+    <div class="actor s3"><div class="tag">The senses · ESP32</div>
+      <h3>The sensor node</h3>
+      <p>A thumb-sized chip that measures temperature and humidity, and has a small screen, a buzzer
+         and a light it can flash on command.</p></div>
+  </div>
+
+  <h2>How one question travels</h2>
+  <p class="say">Follow a question from you to an answer — for example, "what's the temperature?"</p>
+  <figure>
+    <svg viewBox="0 0 720 320" role="img" aria-label="Flow chart: a question goes left to right from you, to the station, to the local AI model, to the answer on the screen and web page. The station may detour up to the sensor for a temperature reading. The answer also returns along the bottom to you.">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+          <path d="M0 0L10 5L0 10z" fill="var(--arrow)"></path>
+        </marker>
+      </defs>
+      <style>
+        .bt   { font: 600 13.5px var(--font-ui); fill: var(--ink); }
+        .bs   { font: 10.5px var(--font-mono); fill: var(--muted); }
+        .badge{ font: 700 11px var(--font-head); fill: var(--a1); }
+        .edge { stroke: var(--arrow); stroke-width: 1.8; fill: none; marker-end: url(#ar); }
+        .edge.soft { stroke-dasharray: 5 4; }
+        .elbl { font: 10px var(--font-mono); fill: var(--muted); }
+        .ret  { stroke: var(--a2); stroke-width: 1.8; fill: none; marker-end: url(#ar); opacity: .85; }
+      </style>
+
+      <!-- main left-to-right spine: You -> Station -> Model -> Answer -->
+      <!-- YOU -->
+      <rect x="14" y="120" width="118" height="70" rx="13" fill="var(--panel)" stroke="var(--line)" stroke-width="1.5"></rect>
+      <text class="badge" x="73" y="140" text-anchor="middle">YOU ASK</text>
+      <text class="bt" x="73" y="160" text-anchor="middle">You</text>
+      <text class="bs" x="73" y="177" text-anchor="middle">voice·type·photo</text>
+      <!-- STATION -->
+      <rect x="196" y="116" width="156" height="78" rx="13" fill="var(--a1bg)" stroke="var(--a1)" stroke-width="1.5"></rect>
+      <text class="badge" x="274" y="136" text-anchor="middle">UNDERSTANDS</text>
+      <text class="bt" x="274" y="156" text-anchor="middle">Station · laptop</text>
+      <text class="bs" x="274" y="173" text-anchor="middle">picks the right</text>
+      <text class="bs" x="274" y="186" text-anchor="middle">AI model</text>
+      <!-- MODEL -->
+      <rect x="416" y="120" width="140" height="70" rx="13" fill="var(--panel)" stroke="var(--line)" stroke-width="1.5"></rect>
+      <text class="badge" x="486" y="140" text-anchor="middle">ANSWERS</text>
+      <text class="bt" x="486" y="160" text-anchor="middle">Local AI model</text>
+      <text class="bs" x="486" y="177" text-anchor="middle">runs on laptop</text>
+      <!-- ANSWER -->
+      <rect x="600" y="116" width="106" height="78" rx="13" fill="var(--a2bg)" stroke="var(--a2)" stroke-width="1.5"></rect>
+      <text class="badge" x="653" y="136" text-anchor="middle" style="fill:var(--a2)">YOU SEE IT</text>
+      <text class="bt" x="653" y="156" text-anchor="middle">Answer</text>
+      <text class="bs" x="653" y="173" text-anchor="middle">hub screen</text>
+      <text class="bs" x="653" y="186" text-anchor="middle">+ web page</text>
+
+      <!-- SENSOR branch (optional, above the station) -->
+      <rect x="196" y="22" width="156" height="58" rx="13" fill="var(--a3bg)" stroke="var(--a3)" stroke-width="1.5"></rect>
+      <text class="bt" x="274" y="46" text-anchor="middle">Sensor · ESP32</text>
+      <text class="bs" x="274" y="63" text-anchor="middle">reads the room</text>
+
+      <!-- spine edges -->
+      <path class="edge" d="M132 155 H196"></path>
+      <text class="elbl" x="164" y="147" text-anchor="middle">the ask</text>
+      <path class="edge" d="M352 155 H416"></path>
+      <path class="edge" d="M556 155 H600"></path>
+
+      <!-- sensor detour: up on ask, down with the reading -->
+      <path class="edge soft" d="M250 116 V80"></path>
+      <text class="elbl" x="214" y="100" text-anchor="end">room?</text>
+      <path class="edge" d="M300 80 V116"></path>
+      <text class="elbl" x="336" y="100" text-anchor="start">reading</text>
+
+      <!-- answer returns to you along the bottom -->
+      <path class="ret" d="M653 194 V250 H73 V190"></path>
+      <text class="elbl" x="360" y="266" text-anchor="middle" style="fill:var(--a2)">the answer comes back to you</text>
+    </svg>
+    <p class="flow-cap">The orange path is every question; the dotted detour to the sensor happens only
+       when you ask about the room. The teal line is the answer returning — it lands both on the hub's
+       little screen and on the web page.</p>
+  </figure>
+
+  <ol class="steps">
+    <li><div><h4>You ask</h4><p>Press a touch pad and speak, type on the web page, or hold up a photo
+       to the webcam.</p></div></li>
+    <li><div><h4>The station works out what you mean</h4><p>If you spoke, it turns speech into text. It
+       then sorts the question — a chat, a coding question, or "look at this picture" — and picks the
+       model that fits.</p></div></li>
+    <li><div><h4>It checks the room if needed</h4><p>Ask about temperature and the station quietly asks
+       the sensor for a fresh reading, then hands that fact to the AI.</p></div></li>
+    <li><div><h4>The model answers</h4><p>A language model running on your own laptop writes the reply —
+       nothing leaves your home.</p></div></li>
+    <li><div><h4>You see the answer</h4><p>It appears word-by-word on the web page and on the bot's face
+       on the hub screen.</p></div></li>
+  </ol>
+
+  <h2>What it can do</h2>
+  <div class="feat">
+    <div class="fcard"><h4>Talk to it</h4><p>Ask by voice from the hub's touch pad, or by the microphone
+       button on the web page.</p></div>
+    <div class="fcard"><h4>Show it things</h4><p>Point the webcam, upload a photo, or use your phone's
+       camera, and it describes what it sees.</p></div>
+    <div class="fcard"><h4>Know the room</h4><p>Live temperature and humidity, shown on the screen and
+       used when you ask about the room.</p></div>
+    <div class="fcard"><h4>A living face</h4><p>The hub screen shows a bot face that reacts — calm when
+       idle, talking when answering, alert when it's too hot.</p></div>
+    <div class="fcard"><h4>Control panel</h4><p>A web page shows every device, lets you press buttons
+       (beep, blink, read temperature) and watch answers stream in.</p></div>
+    <div class="fcard"><h4>Developer view</h4><p>A second page shows exactly how each answer was made,
+       the live message traffic, and the health of every machine.</p></div>
+  </div>
+
+  <h2>By the numbers</h2>
+  <div class="facts">
+    <div class="fact"><div class="n">3</div><div class="k">devices working together</div></div>
+    <div class="fact"><div class="n">4</div><div class="k">AI jobs: chat, code, vision, speech</div></div>
+    <div class="fact"><div class="n">100%</div><div class="k">runs on your own machines</div></div>
+    <div class="fact"><div class="n">&lt;1s</div><div class="k">for a typical chat answer</div></div>
+    <div class="fact"><div class="n">100</div><div class="k">automated tests passing</div></div>
+    <div class="fact"><div class="n">0</div><div class="k">cloud accounts or fees</div></div>
+  </div>
+
+  <div class="note"><b>Why local matters.</b> Everything — your voice, your photos, your questions —
+     stays on your laptop and your home network. There's no cloud service listening in, no subscription,
+     and it keeps working with the internet unplugged.</div>
+
+  <footer>
+    A guide to the <b>local-ai-ecosystem</b> project. The brain is a Windows laptop, the hub is a
+    Raspberry Pi, the sensor is an ESP32 — connected over home Wi-Fi with lightweight messaging.
+  </footer>
+</div>
+</body>
+</html>

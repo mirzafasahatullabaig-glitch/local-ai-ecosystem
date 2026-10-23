@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>eco Technical Stack</title>
+
+<style>
+  :root { color-scheme: light dark; padding: env(safe-area-inset-top,0) 0 env(safe-area-inset-bottom,0); }
+  body { margin: 0; font: 14px system-ui, -apple-system, sans-serif; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<style>
+  /* Layout: an A–Z reference. Sticky filter bar by layer, then alphabetical
+     entries; each entry carries a layer chip, version, and one-line role. */
+  :root {
+    --bg: #faf8f4; --panel: #ffffff; --ink: #1f1b15; --muted: #6a6253; --faint: #948b7b;
+    --line: #e7dfd3; --rule: #d6cbb9;
+    --brain: #c0612c; --brainbg: #f6e7dc;   /* station / laptop */
+    --hub: #2f6f6a;  --hubbg: #dcebe9;       /* Raspberry Pi */
+    --edge: #8a6d1f; --edgebg: #efe6cf;      /* ESP32 */
+    --proto:#5a4a8a; --protobg:#e8e3f3;      /* protocol / shared */
+    --tool: #3f6a4a; --toolbg: #e2efe6;      /* tooling / ops */
+    --font-head: "Fraunces", Georgia, serif;
+    --font-ui: "Inter", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg: #14110c; --panel: #1d1911; --ink: #efe9df; --muted: #a79d8c; --faint: #7d7363;
+    --line: #2c271d; --rule: #3a3326;
+    --brain:#e2874f; --brainbg:#35241a; --hub:#5bb0a8; --hubbg:#15302d;
+    --edge:#d2ad4e; --edgebg:#302814; --proto:#a99ad6; --protobg:#211c33;
+    --tool:#79c08e; --toolbg:#15281b; color-scheme: dark;
+  } }
+  :root[data-theme="dark"] {
+    --bg: #14110c; --panel: #1d1911; --ink: #efe9df; --muted: #a79d8c; --faint: #7d7363;
+    --line: #2c271d; --rule: #3a3326;
+    --brain:#e2874f; --brainbg:#35241a; --hub:#5bb0a8; --hubbg:#15302d;
+    --edge:#d2ad4e; --edgebg:#302814; --proto:#a99ad6; --protobg:#211c33;
+    --tool:#79c08e; --toolbg:#15281b; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--font-ui); line-height: 1.55; }
+  .page { max-width: 880px; margin: 0 auto;
+          padding-left: max(18px, env(safe-area-inset-left, 0px));
+          padding-right: max(18px, env(safe-area-inset-right, 0px));
+          padding-block: 30px 48px; }
+
+  .eyebrow { font: 600 11.5px var(--font-mono); letter-spacing: .16em; text-transform: uppercase;
+             color: var(--brain); }
+  h1 { font-family: var(--font-head); font-weight: 600; font-size: clamp(28px, 5.5vw, 44px);
+       line-height: 1.04; margin: 7px 0 0; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); margin: 10px 0 0; max-width: 64ch; }
+
+  /* sticky filter bar */
+  body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px);
+                 background: var(--bg); z-index: 10; }
+  .bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 9; background: var(--bg);
+         padding: 14px 0 10px; margin-top: 18px; border-bottom: 1px solid var(--line); }
+  .filters { display: flex; flex-wrap: wrap; gap: 7px; }
+  .filters button { font: 600 12px var(--font-ui); border: 1px solid var(--line); background: var(--panel);
+    color: var(--muted); padding: 5px 12px; border-radius: 20px; cursor: pointer; display: inline-flex;
+    align-items: center; gap: 6px; }
+  .filters button[aria-pressed="true"] { color: var(--ink); border-color: currentColor; }
+  .filters button .sw { width: 9px; height: 9px; border-radius: 3px; }
+  .count { font: 11.5px var(--font-mono); color: var(--faint); margin-top: 8px; }
+
+  .list { margin-top: 6px; }
+  .item { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: baseline;
+          padding: 15px 0; border-bottom: 1px solid var(--line); }
+  .item.hide { display: none; }
+  .nm { font-family: var(--font-head); font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+  .nm .ver { font: 400 11px var(--font-mono); color: var(--faint); margin-left: 8px; }
+  .chip { justify-self: end; font: 600 10px var(--font-mono); letter-spacing: .05em; text-transform: uppercase;
+          padding: 3px 9px; border-radius: 20px; white-space: nowrap; }
+  .role { grid-column: 1 / -1; color: var(--muted); font-size: 13.5px; margin-top: 3px; max-width: 70ch; }
+  .role code { font-family: var(--font-mono); font-size: .88em; color: var(--ink);
+               background: var(--line); padding: 1px 5px; border-radius: 4px; }
+
+  /* layer colors applied by class */
+  .brain { color: var(--brain); background: var(--brainbg); }
+  .hub   { color: var(--hub);   background: var(--hubbg); }
+  .edge  { color: var(--edge);  background: var(--edgebg); }
+  .proto { color: var(--proto); background: var(--protobg); }
+  .tool  { color: var(--tool);  background: var(--toolbg); }
+  .sw.brain{background:var(--brain)} .sw.hub{background:var(--hub)} .sw.edge{background:var(--edge)}
+  .sw.proto{background:var(--proto)} .sw.tool{background:var(--tool)}
+
+  footer { margin-top: 28px; padding-top: 14px; border-top: 1px solid var(--rule);
+           color: var(--muted); font-size: 12.5px; }
+  :focus-visible { outline: 2px solid var(--brain); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="eyebrow">Technical Stack · A → Z</p>
+  <h1>Everything under the hood</h1>
+  <p class="sub">Every language, library, model, protocol and tool in the local-ai-ecosystem project,
+     listed alphabetically with what each one actually does here. Colour shows which part of the system
+     it belongs to.</p>
+
+  <div class="bar">
+    <div class="filters" role="group" aria-label="Filter by layer">
+      <button data-f="all" aria-pressed="true">All</button>
+      <button data-f="brain" aria-pressed="false"><i class="sw brain"></i>Station</button>
+      <button data-f="hub" aria-pressed="false"><i class="sw hub"></i>Raspberry Pi</button>
+      <button data-f="edge" aria-pressed="false"><i class="sw edge"></i>ESP32</button>
+      <button data-f="proto" aria-pressed="false"><i class="sw proto"></i>Protocol</button>
+      <button data-f="tool" aria-pressed="false"><i class="sw tool"></i>Tooling</button>
+    </div>
+    <div class="count" id="count"></div>
+  </div>
+
+  <div class="list" id="list"></div>
+
+  <footer>
+    Versions read from <code style="font-family:var(--font-mono)">requirements.txt</code> and the running
+    system on 2026-10-23. Station on Python 3.11; devices over MQTT; models served locally by Ollama.
+  </footer>
+</div>
+
+<script>
+// layer: brain=laptop station · hub=Raspberry Pi · edge=ESP32 · proto=shared protocol · tool=dev/ops
+const STACK = [
+  ["Adafruit SSD1306 + GFX", "edge", "", "Arduino libraries that drive the ESP32's little OLED screen — the status text and icons."],
+  ["anyio / Starlette", "brain", "starlette 1.9", "The async plumbing under FastAPI. Starlette runs each slow request (speech, vision) in a worker thread so the web page never freezes."],
+  ["ArduinoJson", "edge", "v7", "Builds and parses the JSON command and event messages on the ESP32, in tight memory."],
+  ["ArduinoOTA", "edge", "", "Lets new ESP32 firmware be sent over Wi-Fi instead of a USB cable, password-protected."],
+  ["Bash + PowerShell", "tool", "", "The two shells used to run and manage the station on Windows and the services on the Pi."],
+  ["ctranslate2", "brain", "4.8.3", "The fast inference engine faster-whisper runs on. Set to CPU here (the GPU path needs cuBLAS)."],
+  ["DHT sensor library", "edge", "", "Reads the DHT11 temperature-and-humidity sensor wired to the ESP32."],
+  ["faster-whisper", "brain", "1.2.1", "Turns recorded speech into text (speech-to-text), locally. Powers voice questions from the Pi and the web mic."],
+  ["FastAPI", "brain", "0.156.1", "The web framework for the whole HTTP API — <code>/ask</code>, <code>/listen</code>, the panel, the developer page — with the built-in <code>/docs</code>."],
+  ["Git + GitHub", "tool", "", "Version control; the code lives in a private GitHub repo. History was scrubbed of personal info with git-filter-repo."],
+  ["git-filter-repo", "tool", "", "Rewrote every past commit to remove LAN addresses, the Pi username and a personal email from the whole history."],
+  ["Graphify", "tool", "0.9.85", "Builds the code graph (472 nodes, 23 subsystems) used for the code map, with community names from a local model."],
+  ["httpx", "brain", "0.28.1", "The HTTP client the station uses to call Ollama. Tests swap in a mock transport so no real model runs in <code>pytest</code>."],
+  ["JetBrains Mono / Fraunces / Inter", "tool", "", "The typefaces across the panel, developer page and these documents — a serif for headings, a clean sans for text, a mono for code and data."],
+  ["llama3.2:3b", "brain", "", "The default chat model, kept loaded in the GPU for sub-second answers. Also the fallback for planning."],
+  ["Mosquitto", "hub", "2.0", "The MQTT message broker on the Pi — the post office every device publishes to and subscribes from. Password-protected."],
+  ["MQTT", "proto", "v3.1.1", "The lightweight publish/subscribe messaging protocol all devices talk. Topics like <code>eco/v1/devices/&lt;id&gt;/cmd</code>."],
+  ["NTP (time.h)", "edge", "", "Gives the ESP32 a real wall clock so it can reject expired commands and stamp its own correctly (firmware 0.5)."],
+  ["Ollama", "brain", "0.40.9", "Runs all the local AI models and serves them on <code>127.0.0.1:11434</code> — loopback only, never exposed to the network."],
+  ["OpenCV (cv2)", "hub", "4.10", "Streams the USB webcam live onto the Pi's TFT screen during the pad-3 camera preview, and grabs the snapshot."],
+  ["paho-mqtt", "proto", "2.1.0", "The Python MQTT client used by the station and the Pi agent to send commands and receive events."],
+  ["Pillow (PIL)", "hub", "", "Draws the animated bot face, text and emoji on the Pi's TFT screen, pixel by pixel."],
+  ["pip-audit", "tool", "", "Scans the installed Python packages for known security vulnerabilities. Currently reports none."],
+  ["Protocol v1 (messages.py)", "proto", "", "The shared contract: manifest, state, command and event message shapes, the command lifecycle, and the <code>^[a-z0-9_]{3,32}$</code> device-id rule."],
+  ["PubSubClient", "edge", "", "The MQTT client library on the ESP32 — how it joins the broker and handles commands."],
+  ["pydantic", "proto", "2.14.1", "Validates and parses every message against the protocol schema. A malformed command is rejected, not crashed on."],
+  ["pytest", "tool", "9.1.1", "The test runner — 100 tests, all mocked (no real Ollama, broker or hardware), covering the security behaviour too."],
+  ["Python", "brain", "3.11", "The language for the whole station and the Pi-side scripts (agent, screen, touch, voice). The ESP32 runs C++ instead."],
+  ["qwen2.5-coder:7b", "brain", "", "The model used for coding questions, loaded on demand (one model in the GPU at a time)."],
+  ["qwen2.5:14b", "tool", "", "The local model Graphify uses to name the code-graph communities."],
+  ["qwen3-vl:2b", "brain", "", "The vision model — it describes uploaded photos and webcam snapshots."],
+  ["qwen3.5:4b", "brain", "", "The reasoning model for multi-step planning questions and the backup for chat."],
+  ["Raspberry Pi OS", "hub", "", "The Pi's operating system. Runs the broker and three auto-restarting services (agent, screen, touch) via systemd."],
+  ["RPi.GPIO", "hub", "", "Reads the TTP224 touch pads and drives the pins on the Pi — the physical buttons behind voice and camera."],
+  ["Server-Sent Events (SSE)", "proto", "", "Streams the AI's answer to the web panel word by word, over one long HTTP response from <code>/ask/stream</code>."],
+  ["spidev", "hub", "", "Pushes the rendered screen image to the TFT over the Pi's SPI bus at 16 MHz."],
+  ["SQLite", "brain", "", "The station's small database — registered devices and the history of questions asked. Thread-safe wrapper."],
+  ["systemd", "hub", "", "Keeps the Pi's services alive: <code>eco-agent</code>, <code>eco-tft</code>, <code>eco-touch</code> all restart on crash and start at boot."],
+  ["TTP224", "edge", "", "The 4-pad capacitive touch sensor on the Pi: pads for beep/blink, temperature, camera and push-to-talk."],
+  ["uvicorn", "brain", "0.54.0", "The web server that runs the FastAPI app on port 8000, started by <code>start-station.bat</code>."],
+  ["websockets", "tool", "17.3", "Used in test harnesses to drive a headless browser (over DevTools) and verify the panel and developer pages."],
+  ["Windows Startup task", "tool", "", "A shortcut in the Startup folder launches the station automatically at logon — no manual start needed."],
+];
+
+const LAYERS = {brain:"Station", hub:"Raspberry Pi", edge:"ESP32", proto:"Protocol", tool:"Tooling"};
+const list = document.getElementById("list");
+STACK.sort((a,b)=>a[0].toLowerCase().localeCompare(b[0].toLowerCase()));
+for (const [name, layer, ver, role] of STACK) {
+  const el = document.createElement("div");
+  el.className = "item"; el.dataset.layer = layer;
+  el.innerHTML =
+    `<div class="nm">${name}${ver?`<span class="ver">${ver}</span>`:""}</div>
+     <span class="chip ${layer}">${LAYERS[layer]}</span>
+     <div class="role">${role}</div>`;
+  list.appendChild(el);
+}
+const countEl = document.getElementById("count");
+function apply(f) {
+  let shown = 0;
+  document.querySelectorAll(".item").forEach(it => {
+    const on = f === "all" || it.dataset.layer === f;
+    it.classList.toggle("hide", !on); if (on) shown++;
+  });
+  countEl.textContent = `${shown} of ${STACK.length} technologies`;
+}
+document.querySelectorAll(".filters button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".filters button").forEach(x => x.setAttribute("aria-pressed", x === b));
+  apply(b.dataset.f);
+}));
+apply("all");
+</script>
+</body>
+</html>
